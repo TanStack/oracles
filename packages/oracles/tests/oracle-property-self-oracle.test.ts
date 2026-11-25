@@ -16,8 +16,7 @@
  *   enumerated source keeps one `determinism` test. An enumerated property without a `label` gives
  *   distinct histories distinct test names. A property fails to load when its id is not a registered
  *   oracle property, a required state has no constructed history, a constructed history names an
- *   undeclared state, a fixed or constructed history is one the arbitrary cannot take back (law
- *   `membership`), `owns` is not a non-empty literal list of strings (the gap report reads it
+ *   undeclared state, `owns` is not a non-empty literal list of strings (the gap report reads it
  *   statically), or a work bound's `ratio` is not a finite number of at least 1 (a smaller one would
  *   reject a mutant that does no more work than the unmodified code). When several of the named load
  *   errors apply, the declaration's shape reports first, in this order: an unregistered id, then
@@ -29,7 +28,8 @@
  *   wasted work. A generated source also fails to load when two of its tests would share a name: a
  *   constructed history named `generated`, two constructed histories of one name, or two fixed
  *   histories of one name (maintainer decision, 2026-11-11, option D). These come after its state
- *   checks and before law `membership`, in that order (analyst-chosen, 2026-11-11). A generated
+ *   checks and before law `membership`, in that order (analyst-chosen, 2026-11-11); a history that
+ *   law `membership` rejects fails a test of the property instead of its load. A generated
  *   source whose `bases` is not a whole number of at least 1 fails to load, naming `bases`, after
  *   the pairing of `predict` with a probe-bound state and before its state checks, and then one
  *   whose `drawnBases` is not a whole number of at least 0, naming `drawnBases`, and then the first
@@ -87,17 +87,24 @@
  *   fast-check's shrinking without a limit reaches over the language.
  * - `membership`: a fixed history, or the history a constructed history builds from the first fixed
  *   seed's sample (seed 0's when there is none), that the arbitrary cannot take back (`canShrinkWithoutContext` is false) fails
- *   the property's load, with an error that names the property, the history (a fixed history's
+ *   the property, with an error that names the property, the history (a fixed history's
  *   index and name, or a constructed history's name), and the fix for a `.map` without an
- *   unmapper (maintainer decision, 2026-11-10, F20). A history outside the language is one such
+ *   unmapper (maintainer decision, 2026-11-10, F20). The property's file still loads: the
+ *   property registers one test alone, `membership: fixed history: <name>` or `membership:
+ *   constructed history: <name>`, which fails with that error and runs no history, so the file's
+ *   other properties register and run as they do without it, a property registered after it
+ *   included. The membership test runs in every run without a path replay and in a path replay
+ *   of its own property, and stands aside in a path replay of another property or under a `-t`
+ *   pattern that leaves it out. A history outside the language is one such
  *   history; a history inside it whose arbitrary maps it, at the whole history or at an item,
  *   through a `.map` without an unmapper is another. The same arbitrary with an unmapper takes its
  *   histories back, and an arbitrary without an unmapper but with no fixed or constructed
- *   history loads and runs. A load fails at the first such history, fixed histories first, after
- *   every other load error of a generated source (analyst-chosen order, 2026-11-10). Registration
+ *   history loads and runs. The first such history decides, fixed histories first, after
+ *   every load error of a generated source but its replay errors (analyst-chosen order, 2026-11-10). Registration
  *   builds the constructed histories when the file loads, so a `build` that throws there fails
- *   the load with an error that names the property and the constructed history and carries the
- *   build's error as its cause; constructed histories are built and checked in order.
+ *   the membership test of that constructed history, with an error that names the property and the constructed history and carries the
+ *   build's error as its cause; constructed histories are built and checked in order. Every
+ *   other load error still fails the whole file.
  * - `reach`: a fixed or constructed history that does not enter a state it names fails, and
  *   each passing unit reports how many of its histories entered each declared
  *   state, whether the property names reach itself or the driver records it. A unit that
@@ -362,6 +369,7 @@ import {
   oddKinds,
   outerSuite,
   shellText,
+  siblingId,
   syntheticArbitrary,
   syntheticIds,
 } from './oracle-property-self-oracle-fixture.js'
@@ -577,6 +585,11 @@ type Suite = {
   prefix?: Prefix
   /** A separately received replay environment; omission means ordinary execution. */
   environment?: ReplayEnvironment | null
+  /**
+   * Run each spec once more in a file of its own beside a sibling property,
+   * registered after it, which passes when run alone.
+   */
+  sibling?: boolean
 }
 type Prefix = `ORACLE` | `SYNTH_ORACLE`
 type ReplayEnvironment = {
@@ -1155,6 +1168,11 @@ const genericSuite: fc.Arbitrary<Suite> = fc.record(
     ),
     permuteWarnings: fc.option(fc.boolean(), { nil: undefined, freq: 12 }),
     timeoutPresentation: fc.option(fc.boolean(), { nil: undefined, freq: 12 }),
+    // Drawn last, so the earlier keys keep their draws.
+    sibling: fc.oneof(
+      { weight: 11, arbitrary: fc.constant(false) },
+      { weight: 1, arbitrary: fc.constant(true) },
+    ),
   },
   { requiredKeys: [`drafts`, `seedless`] },
 )
@@ -1184,6 +1202,7 @@ type Plan = {
   hostRngForwarding?: 1 | 2 | `alternate`
   prefix: Prefix
   environment: ReplayEnvironment | null
+  sibling?: boolean
 }
 
 // A constructed history's name under the draft's naming.
@@ -1212,8 +1231,10 @@ function resolveSuite({
   hostRngForwarding,
   prefix = `ORACLE`,
   environment = null,
+  sibling,
 }: Suite): Plan {
   return {
+    ...(sibling ? { sibling: true } : {}),
     ...(callbackPresentation ? { callbackPresentation } : {}),
     ...(callbackIncomingPresentation ? { callbackIncomingPresentation } : {}),
     ...(callbackReason === undefined ? {} : { callbackReason }),
@@ -1461,6 +1482,7 @@ type Kind =
   | `model-not-total`
   | `data`
   | `limit`
+  | `membership`
 type Outcome = {
   kind: Kind
   law?: `three` | `four` | `reach agreement` | `bounded clock`
@@ -2251,6 +2273,12 @@ type SpecExpectation =
       nameError?: boolean
       /** Which history failed law `membership`. */
       membership?: `fixed` | `constructed`
+      /**
+       * Law `membership`: the file loads, the property registers only this
+       * test, and it fails with the load error's text (and its cause) without
+       * running a history, so the file's other properties still run.
+       */
+      failsTest?: string
       /** Whether that history is in the language, so only a `.map` without an unmapper failed it. */
       unmapped?: boolean
     }
@@ -2406,8 +2434,10 @@ function predictSpec(
     if (nameError)
       return { loads: false, loadError: nameError, nameError: true }
     // A fixed or constructed history that the arbitrary cannot take back
-    // fails the load (law `membership`), fixed histories first, naming the
-    // property, the history, and the fix.
+    // fails the property (law `membership`), fixed histories first, naming
+    // the property, the history, and the fix. Its file still loads: the
+    // property registers only its membership test, which fails with that
+    // error, so the file's other properties run.
     const fixedAt = spec.fixed.findIndex(
       (fixedHistory) => !takesBack(spec, member(fixedHistory.history)),
     )
@@ -2418,6 +2448,7 @@ function predictSpec(
         loadFix: mapFix,
         membership: `fixed`,
         unmapped: member(spec.fixed[fixedAt]!.history),
+        failsTest: `membership: fixed history: ${spec.fixed[fixedAt]!.name}`,
       }
     // Registration then builds each constructed history in order: a build
     // that throws names its constructed history and carries its error.
@@ -2428,6 +2459,7 @@ function predictSpec(
           loadError: `oracleProperty ${spec.id}: constructed history "${construction.name}" threw while it was built for registration: ${buildFailure}`,
           loadCause: buildFailure,
           buildError: true,
+          failsTest: `membership: constructed history: ${construction.name}`,
         }
       if (!takesBack(spec, constructedMember(construction.prefix)))
         return {
@@ -2436,6 +2468,7 @@ function predictSpec(
           loadFix: mapFix,
           membership: `constructed`,
           unmapped: constructedMember(construction.prefix),
+          failsTest: `membership: constructed history: ${construction.name}`,
         }
     }
   }
@@ -3068,11 +3101,11 @@ const frameworkStates = [
   `fixed-reach-failure`,
   `fixed-membership-failure`,
   `constructed-membership-failure`,
-  `unmapped-history-load-error`,
-  `item-unmapped-load-error`,
+  `unmapped-history-membership-failure`,
+  `item-unmapped-membership-failure`,
   `unmapper-history-loads`,
   `unmapped-arbitrary-loads`,
-  `constructed-build-load-error`,
+  `constructed-build-membership-failure`,
   `calibration-applied`,
   `calibration-rejected`,
   `calibration-difference-applied`,
@@ -3152,6 +3185,13 @@ const frameworkStates = [
   `replay-without-unit-error`,
   `replay-unit-missing-error`,
   `replay-unit-selected`,
+  // A property whose history fails law membership failed its membership test
+  // while a sibling property registered after it in its file passed.
+  `membership-beside-sibling`,
+  // In a path replay, a membership test runs for its own property and
+  // stands aside for another.
+  `membership-in-own-replay`,
+  `membership-stands-aside-in-replay`,
 ] as const
 
 function frameworkReach(
@@ -3160,6 +3200,23 @@ function frameworkReach(
   expected: ReturnType<typeof suiteModel>,
 ): Iterable<string> {
   const reached = new Set<string>()
+  const shared = trace.find(({ checkpoint }) => checkpoint === `sibling`)
+    ?.value as SiblingRun | undefined
+  for (const spec of plan.specs) {
+    const owed = expected.get(spec.id)!
+    const seen = shared?.[spec.id]
+    if (
+      !owed.loads &&
+      owed.failsTest !== undefined &&
+      seen?.loaded &&
+      seen.tests.some(
+        ({ name, state }) => name === owed.failsTest && state === `failed`,
+      ) &&
+      seen.sibling.length > 0 &&
+      seen.sibling.every(({ state }) => state === `passed`)
+    )
+      reached.add(`membership-beside-sibling`)
+  }
   const host = trace.find(({ checkpoint }) => checkpoint === `host-scope`)
     ?.value as HostScopeRun | undefined
   const hostChildren = trace
@@ -3418,6 +3475,26 @@ function frameworkReach(
       else if (!owed.loads && file.loaded === false)
         reached.add(`bound-enumerated-label-rejected`)
     }
+    // Law `membership`: the property's file loaded, and its membership test
+    // failed in place of the load.
+    if (!owed.loads && owed.failsTest !== undefined) {
+      const failed =
+        file?.loaded === true &&
+        file.tests.some(
+          ({ name, state }) => name === owed.failsTest && state === `failed`,
+        )
+      if (!failed) continue
+      if (owed.buildError) reached.add(`constructed-build-membership-failure`)
+      if (owed.membership === `fixed`) reached.add(`fixed-membership-failure`)
+      if (owed.membership === `constructed`)
+        reached.add(`constructed-membership-failure`)
+      if (owed.unmapped) {
+        reached.add(`unmapped-history-membership-failure`)
+        if (spec.arbitraryMap?.at === `item`)
+          reached.add(`item-unmapped-membership-failure`)
+      }
+      continue
+    }
     if (!owed.loads) {
       if (
         file?.loaded === false &&
@@ -3457,7 +3534,6 @@ function frameworkReach(
       if (owed.shapeError) reached.add(`enumerated-shape-error`)
       if (owed.reservedLabel) reached.add(`reserved-label-error`)
       if (owed.dataError) reached.add(`history-out-of-domain`)
-      if (owed.buildError) reached.add(`constructed-build-load-error`)
       if (owed.emptyDifference)
         reached.add(`calibration-empty-difference-error`)
       if (
@@ -3467,16 +3543,6 @@ function frameworkReach(
         file.loadErrors.some((message) => message.includes(owed.loadError!))
       )
         reached.add(`unit-name-load-error`)
-      if (owed.membership === `fixed`) reached.add(`fixed-membership-failure`)
-      if (owed.membership === `constructed`)
-        reached.add(`constructed-membership-failure`)
-      // A history in the language that only a `.map` without an unmapper
-      // keeps the arbitrary from taking back.
-      if (owed.unmapped) {
-        reached.add(`unmapped-history-load-error`)
-        if (spec.arbitraryMap?.at === `item`)
-          reached.add(`item-unmapped-load-error`)
-      }
       continue
     }
     for (const declaration of spec.fixed) {
@@ -4060,6 +4126,20 @@ function frameworkReach(
       )
     )
       reached.add(`replay-unit-selected`)
+    for (const [index, spec] of plan.specs.entries()) {
+      const owed = expected.get(spec.id)!
+      const membership =
+        !owed.loads && owed.failsTest !== undefined
+          ? under.files[spec.id]?.tests.find(
+              ({ name }) => name === owed.failsTest,
+            )
+          : undefined
+      if (error || plan.environment.path !== `valid` || !membership) continue
+      if (index === 0 && membership.state === `failed`)
+        reached.add(`membership-in-own-replay`)
+      if (index > 0 && membership.state === `skipped`)
+        reached.add(`membership-stands-aside-in-replay`)
+    }
   }
   if (trace.some(({ checkpoint }) => checkpoint === `rerun`))
     reached.add(`rerun-probe`)
@@ -4278,6 +4358,18 @@ type Failure = {
   /** Whether a model error quotes this machine's paths. */
   machinePath?: boolean
 }
+/** By spec id: the spec's file beside a sibling property registered after it. */
+type SiblingRun = Record<
+  string,
+  {
+    loaded: boolean
+    loadErrors: Array<string>
+    /** The spec's own tests, named within the property. */
+    tests: Array<{ name: string; state: string; failure?: Failure }>
+    /** The sibling's tests, named within the sibling. */
+    sibling: Array<{ name: string; state: string }>
+  }
+>
 type SuiteRun = {
   files: Record<
     string,
@@ -4461,6 +4553,13 @@ function classifyKind(
   )
     return `constructed-reach`
   if (text.includes(`no enumerated history entered`)) return `enumerated-reach`
+  // Law `membership`: a history the arbitrary cannot take back, or a
+  // constructed history whose build threw when the property registered.
+  if (
+    text.includes(`a history the arbitrary cannot take back`) ||
+    text.includes(`threw while it was built for registration`)
+  )
+    return `membership`
   if (text.includes(`which the property does not declare`))
     return `undeclared-state`
   if (text.includes(`two runs of`)) return `determinism`
@@ -5701,6 +5800,63 @@ function driveSuite(
       }
     }
     observe(`run`, run)
+    // sibling: each spec once more, in a file of its own with a sibling
+    // property registered after it, so the sibling shows whether the spec's
+    // registration let the rest of its file run (law `membership`). The
+    // spec's own tests run again too; their outcomes belong to the main run.
+    if (plan.sibling) {
+      const shared = plan.specs.map((spec, index) => {
+        const file = join(directory, `sibling-${index}-oracle.test.ts`)
+        writeFileSync(
+          file,
+          `import { siblingProperty, syntheticProperty } from ${JSON.stringify(join(here, `oracle-property-self-oracle-fixture.ts`))}\nsyntheticProperty(${JSON.stringify(spec)})\nsiblingProperty()\n`,
+        )
+        return file
+      })
+      const siblingReport = runVitest(directory, shared, {
+        env: { SELF_ORACLE_LOG: join(directory, `sibling.jsonl`) },
+        prefix,
+      })
+      observe(
+        `sibling`,
+        Object.fromEntries(
+          plan.specs.map((spec, index) => {
+            const reported = siblingReport.files.find(
+              (file) => file.file === shared[index],
+            )
+            const tests = (reported?.tests ?? []).map((test) => ({
+              name: test.name,
+              state: test.state,
+              ...(test.state === `failed`
+                ? { failure: classify(test.errors[0]) }
+                : {}),
+            }))
+            const sibling = `${siblingId} > `
+            return [
+              spec.id,
+              {
+                loaded: reported !== undefined && reported.errors.length === 0,
+                loadErrors: (reported?.errors ?? []).map(
+                  (error) => error.message ?? ``,
+                ),
+                tests: tests
+                  .filter(({ name }) => !name.startsWith(sibling))
+                  .map((test) => ({
+                    ...test,
+                    name: short(spec.id, test.name),
+                  })),
+                sibling: tests
+                  .filter(({ name }) => name.startsWith(sibling))
+                  .map(({ name, state }) => ({
+                    name: name.slice(sibling.length),
+                    state,
+                  })),
+              },
+            ]
+          }),
+        ) satisfies SiblingRun,
+      )
+    }
     // Adding a calibration ahead of another must not change the latter's seed
     // or built history. This is a metamorphic comparison of driver inputs,
     // independent of the framework's particular seed hash.
@@ -6495,6 +6651,118 @@ function environmentUnitOutcome(spec: SyntheticSpec, unit: string): Outcome {
 // The same independent synthetic model judges every receiving child. The
 // context determines selection, never the reported state. Full registration
 // remains owed when a filter or path replay makes most tests stand aside.
+/**
+ * Law `membership` on one property's report: its file loaded, it registered
+ * only its membership test, and that test failed with the owed error text,
+ * its fix, and its cause. Returns the violation, if any.
+ */
+function membershipFailure(
+  owed: Extract<SpecExpectation, { loads: false }>,
+  seen: {
+    loaded: boolean
+    loadErrors: Array<string>
+    tests: Array<{ name: string; state: string; failure?: Failure }>
+  },
+): ReturnType<typeof violation> | undefined {
+  const law = `membership`
+  if (!seen.loaded)
+    return violation(
+      `run`,
+      `a property whose history fails law membership failed its file's load with ${JSON.stringify(seen.loadErrors)}, owed its test ${JSON.stringify(owed.failsTest)}`,
+      law,
+      { actual: seen.loadErrors, expected: owed.failsTest },
+    )
+  const names = seen.tests.map(({ name }) => name)
+  if (JSON.stringify(names) !== JSON.stringify([owed.failsTest]))
+    return violation(
+      `run`,
+      `a property whose history fails law membership registered ${JSON.stringify(names)}, owed only ${JSON.stringify(owed.failsTest)}`,
+      law,
+      { actual: names, expected: [owed.failsTest] },
+    )
+  const [test] = seen.tests
+  const message = test!.failure?.message ?? ``
+  const owedText = [owed.loadError, owed.loadFix].filter(
+    (text) => text !== undefined,
+  )
+  if (
+    test!.state !== `failed` ||
+    !owedText.every((text) => message.includes(text)) ||
+    (owed.loadCause !== undefined &&
+      test!.failure?.causeMessage !== owed.loadCause)
+  )
+    return violation(
+      `run`,
+      `${JSON.stringify(owed.failsTest)} ${test!.state} with ${JSON.stringify(test!.failure ?? null)}, owed a failure holding ${JSON.stringify(owedText)}${owed.loadCause === undefined ? `` : ` caused by ${JSON.stringify(owed.loadCause)}`}`,
+      law,
+      { actual: test!.failure ?? null, expected: owedText },
+    )
+  return undefined
+}
+
+// Law `membership` beside a sibling: a property registered after a spec in
+// the same file runs, and passes as it does alone, unless the spec fails the
+// file's load; a spec whose history fails law membership fails its
+// membership test and does not fail the file. The spec registers the same
+// tests as it does alone.
+function checkSibling(
+  plan: Plan,
+  trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
+  expected: ReturnType<typeof suiteModel>,
+): ReturnType<typeof violation> | undefined {
+  const shared = trace.find(({ checkpoint }) => checkpoint === `sibling`)
+    ?.value as SiblingRun | undefined
+  if (!plan.sibling) return undefined
+  if (!shared)
+    return violation(`sibling`, `the sibling run was not observed`, `trace`)
+  for (const spec of plan.specs) {
+    const owed = expected.get(spec.id)!
+    const seen = shared[spec.id]!
+    const failsFile = !owed.loads && owed.failsTest === undefined
+    const law = owed.loads ? `registration` : `membership`
+    if (failsFile) {
+      if (seen.loaded || seen.sibling.length > 0)
+        return violation(
+          `sibling`,
+          `${spec.id} fails its file's load, but its file ${seen.loaded ? `loaded` : `ran the sibling's tests`}`,
+          `registration`,
+        )
+      continue
+    }
+    const owedSibling = [`determinism`, `sibling`]
+    const ranSibling = seen.sibling
+      .filter(({ state }) => state === `passed`)
+      .map(({ name }) => name)
+      .sort()
+    if (
+      !seen.loaded ||
+      seen.sibling.length !== owedSibling.length ||
+      JSON.stringify(ranSibling) !== JSON.stringify(owedSibling)
+    )
+      return violation(
+        `sibling`,
+        `beside ${spec.id}, the sibling property ${seen.loaded ? `ran ${JSON.stringify(seen.sibling)}` : `failed to load with ${JSON.stringify(seen.loadErrors)}`}, owed ${JSON.stringify(owedSibling)} passing`,
+        owed.loads ? `registration` : `membership`,
+        { actual: seen.sibling, expected: owedSibling },
+      )
+    if (!owed.loads) {
+      const failure = membershipFailure(owed, seen)
+      if (failure) return failure
+      continue
+    }
+    const names = seen.tests.map(({ name }) => name).sort()
+    const owedNames = [...owed.tests.keys()].sort()
+    if (JSON.stringify(names) !== JSON.stringify(owedNames))
+      return violation(
+        `sibling`,
+        `${spec.id} beside a sibling registered ${JSON.stringify(names)}, owed ${JSON.stringify(owedNames)}`,
+        law,
+        { actual: names, expected: owedNames },
+      )
+  }
+  return undefined
+}
+
 function childExpectation(
   plan: Plan,
   child: ChildRun,
@@ -6573,8 +6841,19 @@ function childExpectation(
       !prediction.loads ||
       environment?.error !== undefined ||
       environment?.replayError !== undefined
-    if (rejected) failed = true
-    const names = !rejected ? [...prediction.tests.keys()] : []
+    // Law `membership`: the file loads, and the property registers its
+    // membership test alone, before any replay error of the property.
+    const failsTest =
+      !prediction.loads && environment?.error === undefined
+        ? prediction.failsTest
+        : undefined
+    if (rejected && failsTest === undefined) failed = true
+    const names =
+      failsTest !== undefined
+        ? [failsTest]
+        : !rejected
+          ? [...prediction.tests.keys()]
+          : []
     const owedNames =
       context.kind === `registration-warnings` && context.phases.length
         ? context.phases.flatMap((phase) =>
@@ -6592,6 +6871,44 @@ function childExpectation(
           { actual: actualNames, expected: [...owedNames].sort() },
         ),
       }
+    if (failsTest !== undefined && !prediction.loads) {
+      // It runs wherever its property runs: in every run without a path
+      // replay, and in a path replay of its own property. A `-t` filter
+      // that selects other tests leaves it out.
+      const runs =
+        context.kind === `run` || context.kind === `seedless`
+          ? true
+          : context.kind === `environment`
+            ? !environment?.replay || environment.selected
+            : context.kind === `replay`
+              ? spec.id === context.id
+              : false
+      if (runs) failed = true
+      for (const test of seen) {
+        const failure = test.errors[0]
+        if (
+          runs
+            ? test.state !== `failed` ||
+              test.errors.length !== 1 ||
+              failure?.kind !== `membership` ||
+              (prediction.loadCause !== undefined &&
+                failure.causeMessage !== prediction.loadCause)
+            : test.state !== `skipped` || test.errors.length !== 0
+        )
+          return {
+            failure: violation(
+              `child`,
+              `${spec.id} ${context.kind} ${JSON.stringify(test.name)} ${test.state} as ${JSON.stringify(test.errors)}, owed ${runs ? `its membership failure` : `to stand aside`}`,
+              `membership`,
+              {
+                actual: test.errors,
+                expected: runs ? `membership` : `skipped`,
+              },
+            ),
+          }
+      }
+      continue
+    }
     if (rejected) continue
     const collectOnly =
       context.kind === `registration-warnings` && context.phases.length === 0
@@ -6879,15 +7196,22 @@ function checkSuite(
           spec && child.context.kind === `environment`
             ? environmentSelection(plan, spec)
             : undefined
+        // A history that fails law membership fails a test of the
+        // property, before any replay error of the property, and not its
+        // file's load.
+        const failsTest =
+          declaration !== undefined &&
+          !declaration.loads &&
+          declaration.failsTest !== undefined
         const loadError =
           environment?.error ??
           (declaration && !declaration.loads
             ? declaration.loadError
             : environment?.replayError)
         const rejects =
-          !declaration?.loads ||
           environment?.error !== undefined ||
-          environment?.replayError !== undefined
+          (!failsTest &&
+            (!declaration?.loads || environment?.replayError !== undefined))
         if (
           !declaration ||
           (rejects
@@ -6906,7 +7230,7 @@ function checkSuite(
           return violation(
             `child`,
             `unexpected child load/suite errors: ${JSON.stringify(file)}`,
-            `registration`,
+            failsTest ? `membership` : `registration`,
           )
       }
     }
@@ -7017,9 +7341,24 @@ function checkSuite(
         { actual: difference.appended, expected: difference.listed },
       )
   }
+  const siblingFailure = checkSibling(plan, trace, expected)
+  if (siblingFailure) return siblingFailure
   for (const spec of plan.specs) {
     const owed = expected.get(spec.id)!
     const seen = run.files[spec.id]!
+    if (!owed.loads && owed.failsTest !== undefined) {
+      // Law `membership`: the file loads, and the property registers its
+      // membership test alone, which fails with the error and runs no history.
+      const failure = membershipFailure(owed, seen)
+      if (failure) return failure
+      if (ordinaryLog.some((entry) => entry.id === spec.id))
+        return violation(
+          `run`,
+          `${spec.id} ran a history although a history fails law membership`,
+          `membership`,
+        )
+      continue
+    }
     if (!owed.loads) {
       if (
         (bindingsOf(spec).length ||
@@ -7031,12 +7370,11 @@ function checkSuite(
           `${spec.id} ran a driver despite an invalid calibration selector`,
           `calibration`,
         )
-      const law = owed.membership ? `membership` : `registration`
       if (seen.loaded)
         return violation(
           `run`,
-          `${spec.id} loaded, but its id is unregistered, a required state has no constructed history, a constructed history names an undeclared state, two of its tests would share a name, a fixed or constructed history is one the arbitrary cannot take back, \`owns\` is not a non-empty literal list of strings, a work bound's ratio is not a finite number of at least 1, or a history is not data`,
-          law,
+          `${spec.id} loaded, but its id is unregistered, a required state has no constructed history, a constructed history names an undeclared state, two of its tests would share a name, \`owns\` is not a non-empty literal list of strings, a work bound's ratio is not a finite number of at least 1, or a history is not data`,
+          `registration`,
         )
       if (seen.loadErrors.length !== 1 || seen.loadCauses.length !== 1)
         return violation(
@@ -7060,7 +7398,7 @@ function checkSuite(
         return violation(
           `run`,
           `${spec.id} failed to load with ${JSON.stringify(seen.loadErrors)}, owed ${JSON.stringify(owedText)}`,
-          owed.membership || owed.nameError ? law : `data`,
+          owed.nameError ? `registration` : `data`,
           { actual: seen.loadErrors, expected: owedText },
         )
       continue
@@ -8103,9 +8441,14 @@ function checkEnvironment(
           : unitNames(spec).map(randomUnit).includes(unit)
             ? undefined
             : `${spec.id}: ${name(`UNIT`)} names "${unit}"`
+    // A history that fails law membership fails the property's membership
+    // test, before any replay error, and leaves its file loading.
+    const failsTest = owed.loads ? undefined : owed.failsTest
     const owedError =
       error ?? (owed.loads ? replayError : (owed.loadError ?? undefined))
-    const owedLoads = error === undefined && owed.loads && !replayError
+    const owedLoads =
+      error === undefined &&
+      (failsTest !== undefined || (owed.loads && !replayError))
     if (seen.loaded !== owedLoads)
       return failed(
         `${spec.id} ${seen.loaded ? `loaded` : `failed to load with ${JSON.stringify(seen.loadErrors)}`} under ${JSON.stringify(environmentOf(plan))}, owed ${owedLoads ? `a load` : JSON.stringify(owedError ?? `a load error`)}`,
@@ -8138,8 +8481,21 @@ function checkEnvironment(
       }
     }
     if (!seen.loaded || !replays) continue
-    // A path replay: only the selected unit runs, if any.
+    // A path replay: only the selected unit runs, if any; a membership test
+    // runs in a replay of its own property, whatever unit it names.
     const running = seen.tests.filter((test) => test.state !== `skipped`)
+    if (failsTest !== undefined) {
+      const owedNames = selected ? [failsTest] : []
+      if (
+        JSON.stringify(running.map((test) => test.name)) !==
+          JSON.stringify(owedNames) ||
+        running.some((test) => test.failure?.kind !== `membership`)
+      )
+        return failed(
+          `${spec.id} ran ${JSON.stringify(running.map((test) => [test.name, test.failure?.kind]))} in a path replay, owed ${JSON.stringify(owedNames)} failing law membership`,
+        )
+      continue
+    }
     const owedRunning = selected && unit !== undefined ? [unit] : []
     if (
       JSON.stringify(running.map((test) => test.name)) !==
@@ -8263,6 +8619,15 @@ const fixedHistory = (
     environment: null,
   },
 })
+// A fixed history whose specs also run beside a sibling property.
+const siblingHistory = (
+  name: string,
+  enters: Array<(typeof frameworkStates)[number]>,
+  ...drafts: Array<Draft>
+) => {
+  const fixed = fixedHistory(name, enters, ...drafts)
+  return { ...fixed, history: { ...fixed.history, sibling: true } }
+}
 const seedlessHistory = (
   name: string,
   enters: Array<(typeof frameworkStates)[number]>,
@@ -9044,6 +9409,7 @@ oracleProperty({
       `bound-calibration-registration-error`,
       `bound-constructed-driver`,
       ...appendedStates,
+      `membership-beside-sibling`,
     ],
     measured: frameworkStates.filter(
       (state) =>
@@ -9057,6 +9423,7 @@ oracleProperty({
         !callbackRepresentationStates.some((required) => required === state) &&
         !round3FrameworkStates.some((required) => required === state) &&
         !state.startsWith(`bound-`) &&
+        state !== `membership-beside-sibling` &&
         state !== `unbound-prototype-probe` &&
         state !== `registration-warning-policy`,
     ),
@@ -9856,6 +10223,26 @@ oracleProperty({
         enters: [`drawn-base-failure-replayed`],
         build: (generated: Suite) =>
           unitWitnessSuite([drawnFailureDraft(generated.drafts[0]!.reachVia)]),
+      },
+      // Law `membership`: a history the arbitrary cannot take back fails its
+      // property's membership test, and the sibling property registered
+      // after it in the same file runs and passes.
+      {
+        name: `a membership failure beside a sibling property`,
+        enters: [`membership-beside-sibling`],
+        build: (generated: Suite): Suite => ({
+          drafts: [
+            generatedDraft(
+              generated.drafts[0]!.clock
+                ? { fixed: [at([5])] }
+                : { constructed: [{ prefix: [5], enters: [] }] },
+            ),
+          ],
+          seedless: false,
+          prefix: `ORACLE`,
+          environment: null,
+          sibling: true,
+        }),
       },
     ],
     fixed: [
@@ -11014,20 +11401,20 @@ oracleProperty({
         [`fixed-reach-failure`],
         generatedDraft({ fixed: [{ history: [0], enters: [`saw-1`] }] }),
       ),
-      fixedHistory(
-        `a fixed history outside the language fails to load`,
-        [`fixed-membership-failure`],
+      siblingHistory(
+        `a fixed history outside the language fails its property's membership test`,
+        [`fixed-membership-failure`, `membership-beside-sibling`],
         generatedDraft({ fixed: [at([5])] }),
       ),
-      fixedHistory(
-        `a constructed history outside the language fails to load`,
-        [`constructed-membership-failure`],
+      siblingHistory(
+        `a constructed history outside the language fails its property's membership test`,
+        [`constructed-membership-failure`, `membership-beside-sibling`],
         generatedDraft({ constructed: [{ prefix: [5], enters: [] }] }),
       ),
-      // The load error names the history by its index, so the second fixed
+      // The error names the history by its index, so the second fixed
       // history is named, and before the constructed history.
       fixedHistory(
-        `the first fixed history the arbitrary cannot take back fails the load before a constructed one`,
+        `the first fixed history the arbitrary cannot take back fails the membership test before a constructed one`,
         [`fixed-membership-failure`],
         generatedDraft({
           fixed: [at([0]), at([5])],
@@ -11037,16 +11424,16 @@ oracleProperty({
       // Agents lost full runs to this: a history inside the language that a
       // `.map` without an unmapper cannot take back failed only at run time.
       fixedHistory(
-        `a fixed history through a .map without an unmapper fails to load`,
-        [`fixed-membership-failure`, `unmapped-history-load-error`],
+        `a fixed history through a .map without an unmapper fails its property's membership test`,
+        [`fixed-membership-failure`, `unmapped-history-membership-failure`],
         generatedDraft({ arbitraryMap: `no unmapper`, fixed: [at([0])] }),
       ),
       fixedHistory(
-        `a constructed history through an item .map without an unmapper fails to load`,
+        `a constructed history through an item .map without an unmapper fails its property's membership test`,
         [
           `constructed-membership-failure`,
-          `unmapped-history-load-error`,
-          `item-unmapped-load-error`,
+          `unmapped-history-membership-failure`,
+          `item-unmapped-membership-failure`,
         ],
         generatedDraft({
           arbitraryMap: `no unmapper`,
@@ -11057,9 +11444,9 @@ oracleProperty({
       ),
       // Registration builds constructed histories when the file loads, so a
       // build that throws there must name its history, not fail unnamed.
-      fixedHistory(
-        `a constructed history whose build throws at registration fails to load, naming it`,
-        [`registration-error`, `constructed-build-load-error`],
+      siblingHistory(
+        `a constructed history whose build throws at registration fails its property's membership test, naming it`,
+        [`constructed-build-membership-failure`, `membership-beside-sibling`],
         generatedDraft({
           throwingBuild: true,
           constructed: [
@@ -11718,6 +12105,16 @@ oracleProperty({
           ...generatedDraft({}),
           source: { kind: `enumerated`, histories: [[0], [1]] },
         },
+      ),
+      // Law `membership`: a path replay of a property whose history fails
+      // the law runs its membership test, which would otherwise have no unit
+      // to run, and a replay of another property leaves it out.
+      suiteHistory(
+        `a path replay runs the membership test of its own property only`,
+        [`membership-in-own-replay`, `membership-stands-aside-in-replay`],
+        { environment: replayOf({ unit: `absent` }) },
+        generatedDraft({ constructed: [{ prefix: [5], enters: [] }] }),
+        generatedDraft({ fixed: [at([5])] }),
       ),
       suiteHistory(
         `a UNIT that names a random unit runs only that unit`,

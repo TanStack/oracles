@@ -198,10 +198,13 @@
  *   it registers, for every fixed history and for the first base of each
  *   constructed history at the first fixed seed (or seed 0 when there is
  *   none); a campaign checks every base it builds. So a
- *   constructed history's `build` runs when the test file loads. It fails to
- *   load naming the history, and a `build` that throws there fails to load
- *   naming its constructed history
- *   (maintainer decision, 2026-11-10); a campaign checks the constructed
+ *   constructed history's `build` runs when the test file loads. The first
+ *   history that fails this, or whose `build` throws there, fails the
+ *   property with an error naming the history (maintainer decision,
+ *   2026-11-10), but not its file: the property registers only that
+ *   history's test, `membership: fixed history: <name>` or `membership:
+ *   constructed history: <name>`, which fails with that error, so the file's
+ *   other properties still run. A campaign checks the constructed
  *   histories its own seed builds. In fast-check 4, a `.map` without an
  *   unmapper, at the whole history or anywhere inside it, takes no value
  *   back, so a history inside the language fails too until its `.map` gets
@@ -2432,6 +2435,23 @@ const untakeable = (id: string, history: string) =>
     `${id}: ${history} a history the arbitrary cannot take back (its \`canShrinkWithoutContext\` is false), so its failures could not shrink. Either the arbitrary cannot generate it, or the history passes through a combinator that cannot map it back. \`.map\` needs an unmapper (its second argument). \`fc.constant\`/\`fc.constantFrom\` take back only primitives or the same object reference, so build objects with \`fc.record\`/\`fc.tuple\` over primitive leaves. \`.chain\`, \`fc.func\`, and \`fc.commands\` cannot take a value back.`,
   )
 
+/**
+ * The one test of a property whose fixed or constructed `history` the
+ * registration rejected: it fails with that `error`. A check of the
+ * declaration, not of production, so its route is `calibration`. It also runs
+ * in a path replay of its own property, which has no unit left to run.
+ */
+const membershipTest = (
+  id: string,
+  history: string,
+  error: unknown,
+): PropertyTest => ({
+  name: `membership: ${history}`,
+  route: `calibration`,
+  replays: [id],
+  run: () => Promise.reject(error),
+})
+
 function generatedTests<THistory, TExpected, TPlan>(
   unbound: OraclePropertyOptions<THistory, TExpected, TPlan>,
   source: GeneratedHistories<THistory>,
@@ -2603,15 +2623,31 @@ function generatedTests<THistory, TExpected, TPlan>(
       ...build(runSeed, bases + drawn).slice(bases),
     ]
   }
-  // Registration checks every fixed history, then the constructed histories
-  // built from the first fixed seed (or seed 0 when there is none), so a
-  // history that cannot shrink fails the load rather than a full run.
-  for (const [index, fixed] of (source.fixed ?? []).entries())
-    if (!source.arbitrary.canShrinkWithoutContext(fixed.history))
-      throw untakeable(id, `fixed history ${index} ("${fixed.name}") is`)
+  // Registration checks every fixed history, then builds and checks the
+  // constructed histories from the first fixed seed (or seed 0 when there is
+  // none), so a history that cannot shrink fails before a full run. It fails
+  // the property, not its file: the property registers only the membership
+  // test of the first such history, and the file's other properties run.
   const firstSeed = source.fixedSeeds[0] ?? 0
-  for (const index of constructions.keys())
-    constructedAt(firstSeed, index, true)
+  const untaken = (source.fixed ?? []).findIndex(
+    ({ history }) => !source.arbitrary.canShrinkWithoutContext(history),
+  )
+  if (untaken >= 0) {
+    const { name } = source.fixed![untaken]!
+    return [
+      membershipTest(
+        id,
+        `fixed history: ${name}`,
+        untakeable(id, `fixed history ${untaken} ("${name}") is`),
+      ),
+    ]
+  }
+  for (const [index, { name }] of constructions.entries())
+    try {
+      constructedAt(firstSeed, index, true)
+    } catch (error) {
+      return [membershipTest(id, `constructed history: ${name}`, error)]
+    }
 
   // A campaign's units: one per constructed history, then `generated`.
   const unitNames = [...constructedNames, `generated`]

@@ -328,8 +328,10 @@ in the model.
   Give `build` an explicit return type (`build: (base): History => ({ ... })`)
   or use `as const` on narrowed literals so the file typechecks cleanly.
 - **Every arbitrary must take its histories back.** Each `fixed` and
-  constructed history goes back through the arbitrary, and one that cannot
-  fails when the file loads, naming the history. Give each `.map` its inverse
+  constructed history goes back through the arbitrary. When one cannot, its
+  property registers only one test, `membership: fixed history: <name>` or
+  `membership: constructed history: <name>`, which fails naming the history;
+  the file's other properties still run. Give each `.map` its inverse
   (`.map(f, unmap)`, where `unmap` throws on a value it cannot map back), and
   avoid `.chain`. Build objects with `fc.record` or `fc.tuple` over primitive
   leaves. `fc.constant` and `fc.constantFrom` take back only primitives, or
