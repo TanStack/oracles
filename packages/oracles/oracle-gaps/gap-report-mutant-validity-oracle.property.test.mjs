@@ -22,6 +22,10 @@
  * Refinement: every emitted mutant's run agrees with the model. Types change
  * nothing (the hostile programs): erasing a program's types changes none of
  * its sites and no dead-code mark, and every dead-code mark there holds.
+ * Invalid evidence (the callers programs, proposed for approval): a site
+ * carries the generator's `invalid` evidence exactly on the shapes its four
+ * rules decide, with that rule's text, and no call of the module's exports
+ * distinguishes a site that carries it.
  *
  * Authority: the maintainer's decision of 2026-11-11 above, relayed by the
  * coordinator after the fifth soundness review, and the frozen design v20's
@@ -128,6 +132,8 @@ const LAW_TYPELESS = `erasing the types changes no emitted site and no dead-code
 const LAW_BOUNDARY = `a boundary hint sits only on a site that a 0 and -0 history distinguishes`
 const LAW_REFINE = `the mutant run agrees with the model`
 const LAW_KNOWN = `every emitted mutant is a site of the grammar`
+const LAW_INVALID_SOUND = `no call of a module's exports distinguishes a mutant that carries the invalid evidence`
+const LAW_INVALID_EXACT = `a mutant carries the invalid evidence exactly on the shapes its rules decide, with that rule's text`
 const LAW_INERT = `instrumentation with no mutant active is inert`
 
 // ## Grammar
@@ -2762,6 +2768,307 @@ function mutateText(text, mutant) {
   return `${text.slice(0, at)}${replacement}${text.slice(at + mutant.original.length)}`
 }
 
+// ## Callers: the generator's evidence that no caller tells a mutant apart
+//
+// A seventh family (a downstream project's report, 2026-11-25: once its real
+// gaps were closed, a large share of its survivors were mutants that no
+// caller could tell from the original, and each had to be written up by
+// hand as a suspected invalid mutant). A program is an ES module. Its
+// exports are everything a caller outside it reaches, so the model calls
+// each export on every input, settles each result, and a site is distinct
+// when some call's result differs under its mutant, applied as text.
+//
+// - Returns: a helper `h`, declared, exported, as a `const` or `let` arrow,
+//   async, or a private method `#h` of an exported class, with `if (a === 1) return true;` and a last `return R`, R a
+//   falsy literal (`false`, `null`, `0`, `''`), `true`, or the parameter.
+//   The exported `f` calls it as a condition, negated, in a conjunction that
+//   is a condition, as a statement, under `void`, as a statement and then a
+//   condition, as a value (`h(a) && a`, a bound value, a returned call,
+//   `h(a) ?? 3`), through an alias, assigned to a variable as a
+//   statement, passed to a call that is a condition, or through `.call`.
+// - Fields: an object literal `{ k: V, m: M, }`, a local or module `const`, a
+//   local `let`, or an exported `const`, read by `f` through `== null`, `!=
+//   undefined`, `?.`, `??`, the right of `??`, a condition, a strict `===
+//   null`, a plain read, a
+//   `typeof`, `in`, `Object.keys`, `JSON.stringify`, a computed key, or after
+//   a write; no reader reads `k` at all in the control `o.m`. Three more
+//   literals: one with a spread before `k`, one whose dropped name is
+//   `constructor` (a property every object inherits), and one with `k`
+//   twice.
+//
+// The rules a user relies on (proposed for approval), each with its
+// evidence text, which the report prints. A site carries the `invalid`
+// evidence exactly on these shapes, with that text, and nowhere else; and no
+// call of the module's exports distinguishes a site that carries it.
+// - DISCARDED: a return of an unexported, synchronous, non-generator
+//   function, declared, bound to a `const`, or a private method, that only
+//   direct calls reach, each a statement or under `void`.
+// - FALSY: the same function, each call a condition (an `if`, `!`, a
+//   ternary's test, or an `&&` or `||` operand that is one) or a statement,
+//   and the returned value a falsy literal.
+// - NULL_READS: a property `k: null` of a literal with plain, distinct
+//   names, bound to an unexported `const` that is only read through named
+//   properties, never written, called, or passed; every read of `k` is
+//   `== null`, `!= undefined`, `?.`, `??`, or a condition; `k` is no
+//   property that objects inherit.
+// - UNREAD: the same object, a property whose value is a literal or a local
+//   read, and no read of it at all.
+const INVALID = {
+  discarded: `an unexported function that only direct calls reach, and each call discards its value`,
+  falsy: `an unexported function that only direct calls reach, each call reads its value as a condition at most, and the returned value is a falsy literal`,
+  nullReads: `an unexported \`const\` object read only through its named properties, and each read of this one treats \`null\` as \`undefined\` (\`== null\`, \`?.\`, \`??\`, a condition)`,
+  unread: `an unexported \`const\` object read only through its named properties, and no code reads this one`,
+}
+const CALLER_HELPERS = {
+  declared: (body) => `function h(a) {\n${body}\n}`,
+  exported: (body) => `export function h(a) {\n${body}\n}`,
+  arrow: (body) => `const h = (a) => {\n${body}\n};`,
+  letArrow: (body) => `let h = (a) => {\n${body}\n};`,
+  async: (body) => `async function h(a) {\n${body}\n}`,
+}
+// Each use of `h` in `f`, and what it does with the value: discards it,
+// reads it as a condition, or reads it otherwise.
+const CALLER_USES = {
+  condition: [`if (h(a)) return 1;\n  return 2;`, `condition`],
+  negated: [`return !h(a) ? 1 : 2;`, `condition`],
+  conjunction: [`if (h(a) && a !== 2) return 1;\n  return 2;`, `condition`],
+  statement: [`h(a);\n  return a;`, `discard`],
+  voided: [`return void h(a);`, `discard`],
+  mixed: [`h(a);\n  if (h(a)) return 1;\n  return 2;`, `condition`],
+  value: [`return h(a) && a;`, `value`],
+  bound: [`const y = h(a);\n  return y ? 1 : 2;`, `value`],
+  returned: [`return h(a);`, `value`],
+  nullish: [`return h(a) ?? 3;`, `value`],
+  aliased: [`const g = h;\n  return g(a);`, `value`],
+  called: [`return h.call(null, a);`, `value`],
+  assigned: [`let g;\n  g = h;\n  return g(a);`, `value`],
+  argument: [
+    `const check = (fn) => fn(0) === false;\n  if (check(h)) return 1;\n  return 2;`,
+    `value`,
+  ],
+}
+const FALSY = [`false`, `null`, `0`, `''`]
+const callerPrograms = []
+const returnsProgram = (helper, use, last) => {
+  const body = `  if (a === 1) return true;\n  return ${last};`
+  // A private method is called on `this` from a method of its class, which
+  // the exported `f` runs.
+  const text =
+    helper === `private`
+      ? `export class C {\n#h(a) {\n${body}\n}\ng(a) {\n  ${CALLER_USES[use][0].replace(/\bh\b/g, `this.#h`)}\n}\n}\nexport function f(a) {\n  return new C().g(a);\n}\n`
+      : `${CALLER_HELPERS[helper](body)}\nexport function f(a) {\n  ${CALLER_USES[use][0]}\n}\n`
+  const first = text.indexOf(`return true;`) + `return `.length
+  // The helper's own last return, after its `return true;`.
+  const second = text.indexOf(`return ${last};`, first) + `return `.length
+  // The rule's shape: a helper the rules read, and what its calls do.
+  const ruled =
+    helper === `declared` || helper === `arrow` || helper === `private`
+  const reads = CALLER_USES[use][1]
+  const owedOf = (value) =>
+    !ruled || reads === `value`
+      ? undefined
+      : reads === `discard`
+        ? INVALID.discarded
+        : FALSY.includes(value)
+          ? INVALID.falsy
+          : undefined
+  callerPrograms.push({
+    kind: `callers`,
+    name: `${helper} helper returning ${last}, used ${use}`,
+    text,
+    sites: [
+      {
+        operator: `return-undefined`,
+        position: first,
+        marker: `true`,
+        owed: owedOf(`true`),
+      },
+      {
+        operator: `return-undefined`,
+        position: second,
+        marker: last,
+        owed: owedOf(last),
+      },
+    ],
+  })
+}
+for (const use of Object.keys(CALLER_USES))
+  for (const last of [...FALSY, `true`, `a`])
+    returnsProgram(`declared`, use, last)
+for (const use of Object.keys(CALLER_USES))
+  for (const last of [`false`, `a`]) {
+    returnsProgram(`arrow`, use, last)
+    returnsProgram(`private`, use, last)
+  }
+for (const helper of [`exported`, `letArrow`, `async`])
+  for (const use of [`condition`, `statement`, `mixed`])
+    for (const last of [`false`, `a`]) returnsProgram(helper, use, last)
+// Two programs that reach a helper by no name the syntax shows, whose
+// shape the rules would otherwise decide: a sloppy script (no `import`, no
+// `export`), where a function the helper calls reads its `caller` and calls
+// it, and a module whose direct `eval` names the helper.
+const unnamedReach = {
+  'a sloppy script whose callee reads its caller': `let seen;\nfunction g() {\n  seen = g.caller(0);\n}\nfunction h(a) {\n  if (a === 1) {\n    g();\n    return true;\n  }\n  return false;\n}\nexports.f = function (a) {\n  if (h(a)) return String(seen);\n  return 2;\n};\n`,
+  'a module whose direct eval names the helper': `function h(a) {\n  if (a === 1) return true;\n  return false;\n}\nexport function f(a) {\n  if (h(a)) return 1;\n  return String(eval('h(0)'));\n}\n`,
+}
+for (const [name, text] of Object.entries(unnamedReach)) {
+  const first = text.indexOf(`return true;`) + `return `.length
+  const second = text.indexOf(`return false;`) + `return `.length
+  callerPrograms.push({
+    kind: `callers`,
+    name,
+    text,
+    sites: [
+      { operator: `return-undefined`, position: first, marker: `true` },
+      { operator: `return-undefined`, position: second, marker: `false` },
+    ],
+  })
+}
+// Each reader of `o` in `f`, and what it does: reads `k` alone, null and
+// undefined alike (`nullSafe`), reads `m` and never `k` (`other`), reads
+// `k` telling them apart (`value`), or lets the object escape a named read.
+const FIELD_READERS = {
+  loose: [(k) => `o.${k} == null ? 1 : 2`, `nullSafe`],
+  looseUndefined: [(k) => `o.${k} != undefined ? 1 : 2`, `nullSafe`],
+  optional: [(k) => `o.${k}?.length ?? 3`, `nullSafe`],
+  nullish: [(k) => `o.${k} ?? 3`, `nullSafe`],
+  nullishRight: [(k) => `(a === 0 ? undefined : 1) ?? o.${k}`, `value`],
+  condition: [(k) => `o.${k} ? 1 : 2`, `nullSafe`],
+  unread: [() => `o.m`, `other`],
+  strict: [(k) => `o.${k} === null ? 1 : 2`, `value`],
+  plain: [(k) => `o.${k}`, `value`],
+  typeofRead: [(k) => `typeof o.${k}`, `value`],
+  inOperator: [(k) => `'${k}' in o ? 1 : 2`, `escape`],
+  keys: [() => `Object.keys(o).length`, `escape`],
+  passed: [() => `JSON.stringify(o)`, `escape`],
+  element: [(k) => `o[a === 0 ? '${k}' : 'm'] === undefined ? 1 : 2`, `escape`],
+  written: [(k) => `(o.m = 2, o.${k} == null ? 1 : 2)`, `escape`],
+}
+const fieldsProgram = (decl, value, reader, shape = `plain`) => {
+  const local = decl.startsWith(`local`)
+  const k = shape === `inherited` ? `constructor` : `k`
+  const m = local ? `a` : `1`
+  const before =
+    shape === `spread`
+      ? `...{ ${k}: 5 }, `
+      : shape === `twice`
+        ? `${k}: 5, `
+        : ``
+  const literal = `{ ${before}${k}: ${value}, m: ${m}, }`
+  const keyword = decl.endsWith(`Let`) ? `let` : `const`
+  const declaration = `${decl === `exportedConst` ? `export ` : ``}${keyword} o = ${literal};`
+  const read = FIELD_READERS[reader][0](k)
+  const text = local
+    ? `export function f(a) {\n  ${declaration}\n  return ${read};\n}\n`
+    : `${declaration}\nexport function f(a) {\n  return ${read};\n}\n`
+  const at = text.indexOf(literal)
+  const kAt = at + `{ ${before}`.length
+  const mAt = text.indexOf(`m: ${m}, }`, at)
+  // The rule's shape: an unexported `const` whose literal has plain,
+  // distinct names, read only through its named properties.
+  const ruled =
+    (decl === `localConst` || decl === `moduleConst`) &&
+    shape !== `spread` &&
+    shape !== `twice` &&
+    FIELD_READERS[reader][1] !== `escape`
+  const reads = FIELD_READERS[reader][1]
+  const kOwed =
+    !ruled || shape === `inherited`
+      ? undefined
+      : reads === `other`
+        ? INVALID.unread
+        : reads === `nullSafe` && value === `null`
+          ? INVALID.nullReads
+          : undefined
+  const mOwed = ruled && reads !== `other` ? INVALID.unread : undefined
+  callerPrograms.push({
+    kind: `callers`,
+    name: `${decl} ${shape} object with ${k}: ${value}, read ${reader}`,
+    text,
+    sites: [
+      {
+        operator: `field-drop`,
+        position: kAt,
+        marker: `${k}: ${value}, `,
+        owed: kOwed,
+      },
+      {
+        operator: `field-drop`,
+        position: mAt,
+        marker: `m: ${m}, `,
+        owed: mOwed,
+      },
+    ],
+  })
+}
+for (const reader of Object.keys(FIELD_READERS)) {
+  for (const value of [`null`, `0`, `a`])
+    fieldsProgram(`localConst`, value, reader)
+  for (const value of [`null`, `0`]) fieldsProgram(`moduleConst`, value, reader)
+  fieldsProgram(`localLet`, `null`, reader)
+  fieldsProgram(`exportedConst`, `null`, reader)
+}
+for (const shape of [`spread`, `inherited`, `twice`])
+  for (const reader of [`loose`, `unread`, `nullish`])
+    fieldsProgram(`localConst`, `null`, reader, shape)
+const CALLER_INPUTS = [[0], [1], [2]]
+// A module's text as CommonJS, and its exports once it runs.
+const loadModule = (text) => {
+  const js = ts.transpileModule(text, {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.CommonJS,
+    },
+  }).outputText
+  const exported = {}
+  new Function(`exports`, js)(exported)
+  return exported
+}
+// Every export called on every input, each result settled; an export that
+// is no function is read as JSON, which shows each of its properties.
+async function moduleRuns(exported) {
+  const runs = []
+  for (const name of Object.keys(exported).sort())
+    if (typeof exported[name] !== `function`)
+      runs.push(`${name} ${shown(exported[name])}`)
+    else
+      for (const input of CALLER_INPUTS) {
+        let result
+        try {
+          result = await bounded(settled(exported[name](...input)))
+        } catch (error) {
+          result = `threw ${errorName(error)}`
+        }
+        runs.push(`${name}(${input.map(shown).join()}) ${result}`)
+      }
+  return runs
+}
+// A site's mutant as text: a returned value made `undefined` after it is
+// evaluated, or the property left out with its comma.
+const mutateCaller = (text, site) =>
+  `${text.slice(0, site.position)}${site.operator === `return-undefined` ? `void (${site.marker})` : ``}${text.slice(site.position + site.marker.length)}`
+// The model's runs of each program and its sites' mutants, computed when
+// this file loads, since a settled run is asynchronous.
+const callerRuns = new Map()
+for (const program of callerPrograms)
+  for (const text of [
+    program.text,
+    ...program.sites.map((site) => mutateCaller(program.text, site)),
+  ])
+    callerRuns.set(text, (await moduleRuns(loadModule(text))).join(`\n`))
+function callersModel(program) {
+  const original = callerRuns.get(program.text)
+  return {
+    source: program.text,
+    sites: program.sites.map((site) => ({
+      operator: site.operator,
+      position: site.position,
+      distinct: callerRuns.get(mutateCaller(program.text, site)) !== original,
+      owed: site.owed,
+    })),
+  }
+}
+
 // The families, each program one history.
 const histories = [
   ...programs,
@@ -2770,6 +3077,7 @@ const histories = [
   ...returnPrograms,
   ...textPrograms,
   ...ESCAPES,
+  ...callerPrograms,
 ]
 
 // ## Reach
@@ -2790,6 +3098,7 @@ const REACH = {
   text: (program) =>
     `a ${program.family} program the law decides: ${program.name}`,
   shadowed: (form) => `a returned undefined that a ${form} shadows`,
+  invalid: (rule) => `a site that carries the ${rule} evidence`,
 }
 const REQUIRED_STATES = [
   REACH.label,
@@ -2800,6 +3109,7 @@ const REQUIRED_STATES = [
   ...[`voided`, `voidRead`, `undefinedName`].map(REACH.returnExcluded),
   ...[`shadowed`, `varShadowed`].map(REACH.shadowed),
   ...textPrograms.map(REACH.text),
+  ...Object.keys(INVALID).map(REACH.invalid),
 ]
 // The ordering swaps of a first-family program, each with the model's site.
 const orderingSites = (program, expected) =>
@@ -2812,6 +3122,11 @@ const orderingSites = (program, expected) =>
         ORDERING.includes(site.change.node.op),
     )
 function reached(program, trace, expected) {
+  // A callers program enters the state of each rule a site of it owes.
+  if (program.kind === `callers`)
+    return Object.keys(INVALID)
+      .filter((rule) => expected.sites.some((s) => s.owed === INVALID[rule]))
+      .map(REACH.invalid)
   // A text program decides a law when a site there is distinguished, or
   // when it has no site at all (a control).
   if (program.kind === `text`)
@@ -2863,6 +3178,7 @@ function stateOf(program) {
   if (program.kind === `returned`)
     return `a ${program.form} return in ${program.lang}, ${program.strictness}`
   if (program.kind === `escape`) return `a hostile program: ${program.name}`
+  if (program.kind === `callers`) return `a callers program: ${program.name}`
   if (program.kind === `text`)
     return `a ${program.family} program: ${program.name}`
   if (program.kind === `narrowed`)
@@ -3076,6 +3392,11 @@ const families = {
     render: (program) => ({ text: program.text, sites: [] }),
     domain: () => [],
   },
+  // A callers program is judged by its exports' runs (`checkCallers`).
+  callers: {
+    render: (program) => ({ text: program.text, sites: [] }),
+    domain: () => CALLER_INPUTS,
+  },
   narrowed: {
     render: renderNarrowed,
     evaluate: evaluateNarrowed,
@@ -3160,6 +3481,7 @@ function modelRuns(program, change) {
 
 function model(program) {
   if (program.kind === `escape`) return { source: program.text, sites: [] }
+  if (program.kind === `callers`) return callersModel(program)
   if (program.kind === `text`) return textModel(program)
   const { text, sites } = sourceOf(program)
   const distinctIn = (copy, index) => {
@@ -3394,8 +3716,41 @@ async function textDriver(program, observe) {
   }
   observe(`instrumented`, { clean, emitted })
 }
+// A callers program's driver instruments the module and runs its exports
+// with no mutant active and under each emitted mutant. The switch is active
+// while the module loads, since a module-level literal is built then.
+async function callersDriver(program, observe) {
+  const original = callerRuns.get(program.text)
+  const { code, mutants } = instrument(
+    ts,
+    `/mutant-validity-callers.ts`,
+    program.text,
+    `src/mutant-validity-callers.ts`,
+  )
+  const under = async (active) => {
+    const previous = globalThis.__oracleGaps
+    globalThis.__oracleGaps = switchFor(active)
+    try {
+      return (await moduleRuns(loadModule(code))).join(`\n`)
+    } finally {
+      globalThis.__oracleGaps = previous
+    }
+  }
+  const clean = (await under(null)) === original
+  const emitted = []
+  for (const mutant of mutants)
+    emitted.push({
+      operator: mutant.operator,
+      position: mutant.position,
+      differs: (await under(mutant.number)) !== original,
+      evidence: mutant.evidence,
+      ...(mutant.invalid ? { invalid: mutant.invalid } : {}),
+    })
+  observe(`instrumented`, { clean, emitted })
+}
 function driver(program, observe) {
   if (program.kind === `escape`) return escapeDriver(program, observe)
+  if (program.kind === `callers`) return callersDriver(program, observe)
   if (program.kind === `text`) return textDriver(program, observe)
   const { text } = sourceOf(program)
   const domain = domainOf(program)
@@ -3492,11 +3847,81 @@ function checkEscape(program, found) {
   return pass
 }
 
+// A callers program's laws: each site of the grammar is emitted; the
+// `invalid` evidence sits exactly on the sites whose rule owes it, with that
+// rule's text, and on no other emitted mutant; no call of the exports
+// distinguishes a site that carries it, by the model's runs and by the
+// instrumented run; and no other evidence there claims what does not hold.
+function checkCallers(found, expected) {
+  if (!found.clean)
+    return violation(
+      `instrumented`,
+      `with no mutant active, the instrumented module differs from its source ${JSON.stringify(expected.source)}`,
+      LAW_INERT,
+    )
+  const emitted = new Map(found.emitted.map((e) => [keyOf(e), e]))
+  for (const site of expected.sites) {
+    const where = `${site.operator} at offset ${site.position} of ${JSON.stringify(expected.source)}`
+    const mutant = emitted.get(keyOf(site))
+    if (!mutant) return violation(`instrumented`, `skipped ${where}`, LAW_2)
+    if (site.owed !== undefined && site.distinct)
+      return violation(
+        `instrumented`,
+        `the rule "${site.owed}" owes ${where} its evidence, but a call of the module's exports distinguishes it`,
+        LAW_INVALID_SOUND,
+      )
+    if (mutant.invalid !== undefined && (site.distinct || mutant.differs))
+      return violation(
+        `instrumented`,
+        `marks ${where} "${mutant.invalid}", but a call of the module's exports distinguishes it`,
+        LAW_INVALID_SOUND,
+      )
+    if (mutant.invalid !== site.owed)
+      return violation(
+        `instrumented`,
+        site.owed === undefined
+          ? `marks ${where} "${mutant.invalid}", a shape that no rule decides`
+          : `${mutant.invalid === undefined ? `leaves unmarked` : `marks "${mutant.invalid}" on`} ${where}, which the rule "${site.owed}" decides`,
+        LAW_INVALID_EXACT,
+      )
+    if (mutant.differs !== site.distinct)
+      return violation(
+        `instrumented`,
+        `emitted ${where}: its run ${mutant.differs ? `differs from` : `matches`} the original, but the model says ${site.distinct ? `it is distinguishable` : `it is not`}`,
+        LAW_REFINE,
+      )
+    if (mutant.evidence === DEAD && site.distinct)
+      return violation(
+        `instrumented`,
+        `marks ${where} dead code, but an input distinguishes it`,
+        LAW_DEAD,
+      )
+    if (mutant.evidence === BOUNDARY_EVIDENCE)
+      return violation(
+        `instrumented`,
+        `tags ${where} as boundary evidence, which no ordering swap is`,
+        LAW_BOUNDARY,
+      )
+  }
+  const named = new Set(expected.sites.map(keyOf))
+  const stray = found.emitted.find(
+    (e) => e.invalid !== undefined && !named.has(keyOf(e)),
+  )
+  if (stray)
+    return violation(
+      `instrumented`,
+      `marks ${stray.operator} at offset ${stray.position} of ${JSON.stringify(expected.source)} "${stray.invalid}", a site that no rule decides`,
+      LAW_INVALID_EXACT,
+    )
+  return pass
+}
+
 function check(program, observations, expected) {
   const found = observations.find((o) => o.checkpoint === `instrumented`)?.value
   if (!found)
     return violation(`instrumented`, `nothing was instrumented`, LAW_INERT)
   if (program.kind === `escape`) return checkEscape(program, found)
+  if (program.kind === `callers`) return checkCallers(found, expected)
   if (expected.unsettled)
     return violation(
       `instrumented`,
@@ -3576,7 +4001,7 @@ function check(program, observations, expected) {
   return pass
 }
 
-// Five calibrations, each a wrong answer the check must reject.
+// Nine calibrations, each a wrong answer the check must reject.
 const observed = (trace) => {
   const index = trace.findIndex((o) => o.checkpoint === `instrumented`)
   // An escape program's observation has no emitted list to corrupt.
@@ -3608,6 +4033,17 @@ const corruptEntry = (pick, rewrite) => (trace, program) => {
   )
   return withEmitted(trace, seen.index, seen.value, emitted)
 }
+// A calibration of a callers program: the first emitted entry at a site
+// that `pick` selects, rewritten. Each is bound to the program it names.
+const callersEntry = (pick, rewrite) => (trace, program) =>
+  program.kind === `callers`
+    ? corruptEntry(pick, rewrite)(trace, program)
+    : undefined
+const callersHistory = (name) => ({
+  enumerated: histories.findIndex(
+    (program) => program.kind === `callers` && program.name === name,
+  ),
+})
 const calibrations = [
   {
     name: `a distinguishable swap is left out of the emitted mutants`,
@@ -3661,14 +4097,51 @@ const calibrations = [
       (e) => ({ ...e, differs: true }),
     ),
   },
+  // The invalid evidence's calibrations, on callers programs alone.
+  {
+    name: `a site that a call distinguishes carries the invalid evidence`,
+    history: callersHistory(`declared helper returning false, used returned`),
+    law: LAW_INVALID_SOUND,
+    corrupt: callersEntry(
+      (s) => s.distinct && s.owed === undefined,
+      (e) => ({ ...e, invalid: INVALID.unread }),
+    ),
+  },
+  {
+    name: `a site whose rule owes the invalid evidence carries none`,
+    history: callersHistory(`declared helper returning false, used condition`),
+    law: LAW_INVALID_EXACT,
+    corrupt: callersEntry(
+      (s) => s.owed !== undefined,
+      (e) => ({ ...e, invalid: undefined }),
+    ),
+  },
+  {
+    name: `a site carries another rule's evidence`,
+    history: callersHistory(`declared helper returning false, used negated`),
+    law: LAW_INVALID_EXACT,
+    corrupt: callersEntry(
+      (s) => s.owed === INVALID.falsy,
+      (e) => ({ ...e, invalid: INVALID.discarded }),
+    ),
+  },
+  {
+    name: `an undistinguished site that no rule decides carries the evidence`,
+    history: callersHistory(`localLet plain object with k: null, read loose`),
+    law: LAW_INVALID_EXACT,
+    corrupt: callersEntry(
+      (s) => !s.distinct && s.owed === undefined,
+      (e) => ({ ...e, invalid: INVALID.nullReads }),
+    ),
+  },
 ]
 
 oracleProperty({
   id: `oracle-gaps.report-mutant-validity`,
   law: {
-    statement: `No mutant is skipped or marked dead code on the basis of types (maintainer decision, 2026-11-11). Over the inputs JavaScript allows (each declared type's values, and foreign ties: a string beside the number of its digits, null beside a zero, a number beside a bigint, -0 beside 0, and an object whose valueOf has an effect; with the free global g counting its reads), every emitted mutant that is not marked dead code differs from the program on some input (law 1), no site of the operator contract is skipped (law 2), and a site is marked dead code exactly when no input distinguishes it. A mutant carries the outside-annotation label exactly when an annotation excludes every input that distinguishes it, in the first family and the coerced programs, and carries none elsewhere. A return-undefined mutant's runs and reads equal the model's, which evaluates the returned expression and then returns undefined. Erasing a hostile program's types changes none of its sites and no dead-code mark, every dead-code mark there holds on its inputs, and a returned undefined that a declaration binds is a site. Every emitted mutant's run agrees with the model, and a boundary hint sits only on a site that a history of 0 and -0 distinguishes.`,
-    authority: `The maintainer's decision of 2026-11-11, relayed by the coordinator after the fifth soundness review: the gap CLI never skips a mutant, and never marks it dead code, on the basis of types; a mutant the type analysis judges undetectable by inputs of the declared types is a survivor in its own class, whose directive names the distinguishing input; an argument typed any counts as an input the types allow. The frozen design v20's decision of 2026-11-10 that anything an oracle can't possibly detect is an invalid mutant (freeze.md, "Undetectable mutants are invalid"). The dead-code and boundary evidence follow the coordinator's revision and the review of PR #8. The F17 operators follow the coordinator's F17 brief (2026-11-10).`,
-    limits: `A finite domain: each type's values, a fixed set of foreign ties, and one free name. A small grammar, without property reads, calls, getters beyond g, or equal branches with a non-operand expression. A clamp at type bigint is left out. Dead code is tagged only under a pure condition where no ordering comparison runs or not because of the site. The label law requires a label in the first family and the coerced programs, and forbids one everywhere else; the narrowed family's narrowings and the optional chains are not labelled. The sixth review's dimensions are small generated programs judged by running their text: a dead-zone read in a parameter default or a loop head, each binding form of \`undefined\`, a sloppy script with or without a direct \`eval\` or a \`with\`, a returned call, and a coerced comparison at five annotations. The optional chains read one property of a parameter, a local, a wrapper's property, or a literal constant. The returned values are one return of a name, \`void a\`, \`void g\`, or \`undefined\`. Only a return-undefined site's runs are compared in full with the model's. The hostile programs are fixed texts with chosen inputs, compared with their own text with the types erased, as operators and marks; their dead-code marks are judged on their inputs only. Its mutants are applied as text, and an optional chain's \`?.\` is found as the first after the access's start, which a nested chain would misplace. The settled comparison of a text program has blind spots, none of which reaches a defect in today's grammar (the ninth review): an iterator is compared for at most eight steps; only \`next()\` is driven, never \`return()\`, \`throw()\`, or a \`finally\`; a rejection or a throw compares by its error's name, not its message, and a thrown value that is no error by its kind alone, so \`throw 1\` and \`throw 2\` are alike; a fulfilled object compares by its kind; a thenable is awaited as a promise is; and a rejection that floats unhandled is not compared. A run that does not settle within two seconds fails its test.`,
+    statement: `No mutant is skipped or marked dead code on the basis of types (maintainer decision, 2026-11-11). Over the inputs JavaScript allows (each declared type's values, and foreign ties: a string beside the number of its digits, null beside a zero, a number beside a bigint, -0 beside 0, and an object whose valueOf has an effect; with the free global g counting its reads), every emitted mutant that is not marked dead code differs from the program on some input (law 1), no site of the operator contract is skipped (law 2), and a site is marked dead code exactly when no input distinguishes it. A mutant carries the outside-annotation label exactly when an annotation excludes every input that distinguishes it, in the first family and the coerced programs, and carries none elsewhere. A return-undefined mutant's runs and reads equal the model's, which evaluates the returned expression and then returns undefined. Erasing a hostile program's types changes none of its sites and no dead-code mark, every dead-code mark there holds on its inputs, and a returned undefined that a declaration binds is a site. Every emitted mutant's run agrees with the model, and a boundary hint sits only on a site that a history of 0 and -0 distinguishes. In an ES module, a mutant carries the invalid evidence exactly on the shapes its four rules decide (a return of an unexported synchronous function, declared, a const arrow, or a private method, that only direct calls reach, each discarding the value, or reading it as a condition at most for a falsy literal; a property of an object literal bound to an unexported const that only named reads reach, with no read of it, or a null value read only through == null, != undefined, ?., ??, and conditions), with that rule's text, and no call of the module's exports distinguishes a mutant that carries it.`,
+    authority: `The maintainer's decision of 2026-11-11, relayed by the coordinator after the fifth soundness review: the gap CLI never skips a mutant, and never marks it dead code, on the basis of types; a mutant the type analysis judges undetectable by inputs of the declared types is a survivor in its own class, whose directive names the distinguishing input; an argument typed any counts as an input the types allow. The frozen design v20's decision of 2026-11-10 that anything an oracle can't possibly detect is an invalid mutant (freeze.md, "Undetectable mutants are invalid"). For the invalid evidence, a downstream project's report (2026-11-25) that such survivors were a large share once its real gaps were closed, each written up by hand; its rules are proposed for approval. The dead-code and boundary evidence follow the coordinator's revision and the review of PR #8. The F17 operators follow the coordinator's F17 brief (2026-11-10).`,
+    limits: `A finite domain: each type's values, a fixed set of foreign ties, and one free name. A small grammar, without property reads, calls, getters beyond g, or equal branches with a non-operand expression. A clamp at type bigint is left out. Dead code is tagged only under a pure condition where no ordering comparison runs or not because of the site. The label law requires a label in the first family and the coerced programs, and forbids one everywhere else; the narrowed family's narrowings and the optional chains are not labelled. The sixth review's dimensions are small generated programs judged by running their text: a dead-zone read in a parameter default or a loop head, each binding form of \`undefined\`, a sloppy script with or without a direct \`eval\` or a \`with\`, a returned call, and a coerced comparison at five annotations. The optional chains read one property of a parameter, a local, a wrapper's property, or a literal constant. The returned values are one return of a name, \`void a\`, \`void g\`, or \`undefined\`. Only a return-undefined site's runs are compared in full with the model's. The hostile programs are fixed texts with chosen inputs, compared with their own text with the types erased, as operators and marks; their dead-code marks are judged on their inputs only. Its mutants are applied as text, and an optional chain's \`?.\` is found as the first after the access's start, which a nested chain would misplace. The settled comparison of a text program has blind spots, none of which reaches a defect in today's grammar (the ninth review): an iterator is compared for at most eight steps; only \`next()\` is driven, never \`return()\`, \`throw()\`, or a \`finally\`; a rejection or a throw compares by its error's name, not its message, and a thrown value that is no error by its kind alone, so \`throw 1\` and \`throw 2\` are alike; a fulfilled object compares by its kind; a thenable is awaited as a promise is; and a rejection that floats unhandled is not compared. A run that does not settle within two seconds fails its test. The callers programs call each export on three inputs; their rules are judged on small modules with one helper or one object literal, and an environment that changes Object.prototype or a builtin is not an input.`,
   },
   // Enumerated: every program of the grammar is one history, in order.
   histories: { enumerated: histories, states: REQUIRED_STATES },

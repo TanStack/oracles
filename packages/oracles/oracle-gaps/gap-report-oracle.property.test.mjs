@@ -204,7 +204,10 @@
  *    `not-distinguished` when its operator changes a value only on some
  *    inputs and no capture shows which (a loop's condition, an undefined call
  *    value, a dropped field, a skipped call, a logical operator, a returned
- *    value made undefined, a plain read in place of `?.`), and
+ *    value made undefined, a plain read in place of `?.`), except a
+ *    `suspected-invalid` where the generator's static evidence says no
+ *    caller tells the mutant apart (a dropped field of module object data
+ *    that no function reads), and
  *    `not-observed` otherwise: the mutant changed a value that no recorded
  *    observation showed. A test in a file that is not an
  *    oracle file never changes any of this, and runs only when the run asks
@@ -1985,7 +1988,7 @@ function namedOut(text, out) {
 // A gap line the CLI streams to stderr as its mutant is judged (stream.mjs):
 // its class, its line, and its id, after the stream's prefix (law 15).
 const streamedGap =
-  /^oracle-gaps: gap (?:not-judged|extra-work|indeterminate|dead-code|outside-annotation|branch-never-taken|not-infected|not-observed|not-distinguished|unreached|random-only-kill|agreement-only-kill|unregistered-kill|framework-error|timeout|setup-error|crashed|does-not-apply|blocked) L(?:\d+|\?) (\S+) /
+  /^oracle-gaps: gap (?:not-judged|extra-work|indeterminate|dead-code|outside-annotation|suspected-invalid|branch-never-taken|not-infected|not-observed|not-distinguished|unreached|random-only-kill|agreement-only-kill|unregistered-kill|framework-error|timeout|setup-error|crashed|does-not-apply|blocked) L(?:\d+|\?) (\S+) /
 
 // The declared exempt lines that are not our own (v21.2 P10 and I3), each
 // told by its own shape, never by its indentation alone: a block starts at
