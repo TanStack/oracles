@@ -218,7 +218,18 @@
  *    a test's name holds a newline or a tab.
  * 6. A survivor or an unreached mutant that ordinary tests reached gets
  *    their outcome for information, where an assertion failure counts on the
- *    test's route; it never changes the class.
+ *    test's route; it never changes the class. Where that outcome is not
+ *    `survived` (an ordinary test failed, timed out, or its file failed under
+ *    the mutant), the ordinary tests kill what the oracle misses, which
+ *    points at the history the oracle lacks (a downstream report: such a
+ *    survivor was found only by running the ordinary suite by hand). Its gap
+ *    line ends with ` (an ordinary test kills it)`, the results keep the
+ *    ordinary tests that the outcome counts (`ordinaryBy`, in report order,
+ *    when it counts any), its gap in summary.md has an `Ordinary tests:` line
+ *    that names the first of them and says to read that test and add a
+ *    history like it to an owner oracle, and the stdout has one legend line
+ *    for the mark, `oracle-gaps: legend (an ordinary test kills it): …`,
+ *    when any gap carries it, and none otherwise.
  *
  * Law 7 over the classified mutants: the summary lists every gap (every
  * class except `killed` and `unowned`, outside probe code) once under its
@@ -651,11 +662,12 @@ const nameOf = (h, fi, ti) => namesOf(h, fi, ti).join(` > `)
 const keyOf = (h, fi, ti) => `${fileName(h, fi)} > ${nameOf(h, fi, ti)}`
 // A test's name as a message prints it: one line, each control character,
 // line separator, or paragraph separator as its \\uXXXX escape.
-const shownName = (h, fi, ti) =>
-  nameOf(h, fi, ti).replace(
+const shownText = (text) =>
+  text.replace(
     /[\u0000-\u001f\u007f\u2028\u2029]/g,
     (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, `0`)}`,
   )
+const shownName = (h, fi, ti) => shownText(nameOf(h, fi, ti))
 // The framework's route vocabulary (oracle-route.ts in PR #1): three
 // reproducible routes, the random campaign, and one route for the property's
 // own checks. Any other name, the retired `constructed history`,
@@ -884,10 +896,15 @@ function judgedOutcome(h, mi, owners) {
   const ordinary = h.files
     .map((f, fi) => fi)
     .filter((fi) => !h.files[fi].oracle && reachingIn(fi))
-  const withOrdinary = (result) =>
-    ordinary.length > 0
-      ? { ...result, testOutcome: ordinaryOutcome(h, mi, ordinary) }
-      : result
+  const withOrdinary = (result) => {
+    if (ordinary.length === 0) return result
+    const { outcome, by } = ordinaryOutcome(h, mi, ordinary)
+    return {
+      ...result,
+      testOutcome: outcome,
+      ...(by.length > 0 ? { ordinaryBy: by } : {}),
+    }
+  }
   // In report order (law 7): the files by path, and each file's tests in
   // their order. The gap's `Owners` line names these files in this order.
   const targets = [...owners].sort(byPath(h)).filter(reachingIn)
@@ -1169,7 +1186,14 @@ function operandsSeen(h, mi, owners) {
 // The ordinary tests' outcome: their assertion failures count on their
 // test's route, and nothing is nondeterministic for them.
 function ordinaryOutcome(h, mi, files) {
-  const tests = files.flatMap((fi) => h.files[fi].tests.map((t) => ({ t, fi })))
+  const tests = [...files]
+    .sort(byPath(h))
+    .flatMap((fi) => h.files[fi].tests.map((t, ti) => ({ t, fi, ti })))
+  // The outcome, and the ordinary tests it counts, in report order.
+  const counting = (outcome, xs = []) => ({
+    outcome,
+    by: xs.map((x) => nameOf(h, x.fi, x.ti)),
+  })
   const under = ({ t }) => t.under[mi].kind
   const timedOut = tests.some((x) => under(x) === `runTimeout`)
   const ran = tests.filter(
@@ -1194,23 +1218,23 @@ function ordinaryOutcome(h, mi, files) {
   const behavioral = kills.filter(
     (x) => under(x) === `assertion` || x.t.under[mi].law !== `reach agreement`,
   )
-  if (behavioral.length > 0) return `killed`
-  if (timedOut) return `timeout`
-  if (kills.length > 0) return `agreement-only-kill`
-  if (judgedOn(`random`).length > 0) return `random-only-kill`
-  if (judgedOn(`unknown`).length > 0) return `unregistered-kill`
+  if (behavioral.length > 0) return counting(`killed`, behavioral)
+  if (timedOut) return counting(`timeout`)
+  if (kills.length > 0) return counting(`agreement-only-kill`, kills)
+  if (judgedOn(`random`).length > 0)
+    return counting(`random-only-kill`, judgedOn(`random`))
+  if (judgedOn(`unknown`).length > 0)
+    return counting(`unregistered-kill`, judgedOn(`unknown`))
   if (failing.length > 0 && failing.every((x) => under(x) === `timeoutMessage`))
-    return `timeout`
-  if (
-    failing.some(
-      (x) => under(x) !== `timeoutMessage` && kindOf(x.t.route) !== `framework`,
-    )
+    return counting(`timeout`, failing)
+  const crashed = failing.filter(
+    (x) => under(x) !== `timeoutMessage` && kindOf(x.t.route) !== `framework`,
   )
-    return `crashed`
-  if (failing.length > 0) return `framework-error`
+  if (crashed.length > 0) return counting(`crashed`, crashed)
+  if (failing.length > 0) return counting(`framework-error`, failing)
   if (tests.some((x) => under(x) === `setupError` || under(x) === `unhandled`))
-    return `setup-error`
-  return `survived`
+    return counting(`setup-error`)
+  return counting(`survived`)
 }
 
 // A text as a gap line shows it (law 8): whitespace collapsed, and past 60
@@ -1542,6 +1566,32 @@ function ownersLinesOf(summary) {
         owners[key] = lines[j].slice(`  - Owners: `.length).split(`, `)
   })
   return owners
+}
+
+// Law 6: a survivor whose ordinary tests failed under it (any ordinary
+// outcome but `survived`) is a gap that an ordinary test kills. Its gap line
+// ends with the mark, and its summary line names the first test its
+// ordinary outcome counts, as a message prints a test's name.
+const ORDINARY_MARK = `(an ordinary test kills it)`
+const ordinaryKills = (o) =>
+  o.testOutcome !== undefined && o.testOutcome !== `survived`
+const ORDINARY_LEGEND = `oracle-gaps: legend ${ORDINARY_MARK}: An ordinary test fails under the mutant, so the oracle lacks the history that test builds: read the test that the gap's Ordinary tests line in summary.md names, and add a history like it to an owner oracle.`
+const ordinaryLineOf = (o) =>
+  `  - Ordinary tests: ${o.ordinaryBy ? `\`${shownText(o.ordinaryBy[0])}\` fails` : `its ordinary test file fails`} under this mutant, so the oracle lacks the history that the test builds: read it, and add a history like it to an owner oracle.`
+
+// Each gap's `Ordinary tests` line, by its key.
+function ordinaryLinesOf(summary) {
+  const lines = summary.split(`\n`)
+  const found = {}
+  lines.forEach((line, i) => {
+    const key = line.startsWith(`  - Key: `)
+      ? line.slice(`  - Key: `.length).match(/^(`+) (.*) \1; rerun/)?.[2]
+      : undefined
+    if (key === undefined) return
+    for (let j = i + 1; lines[j]?.startsWith(`  - `); j += 1)
+      if (lines[j].startsWith(`  - Ordinary tests: `)) found[key] = lines[j]
+  })
+  return found
 }
 
 // ## Production driver
@@ -2177,8 +2227,11 @@ async function driver(h, observe) {
         reachingPlaces(h, mi, owners).filter((p) => p.t.flaky),
       )
     if (needsOrdinary(result, targets))
-      result.testOutcome = judgeOrdinary(
-        targets.testTargets.map((file) => unitOf(h, fileIndex(file), mi)),
+      Object.assign(
+        result,
+        judgeOrdinary(
+          targets.testTargets.map((file) => unitOf(h, fileIndex(file), mi)),
+        ),
       )
     return result
   })
@@ -2252,10 +2305,12 @@ async function driver(h, observe) {
       class: r.class,
       laws: r.laws && [...r.laws].sort(),
       testOutcome: r.testOutcome,
+      ordinaryBy: r.ordinaryBy,
     })),
     summary: readSummary(summary),
     messages: messagesOf(summary),
     owners: ownersLinesOf(summary),
+    ordinaryLines: ordinaryLinesOf(summary),
     stdout: report.renderStdout?.({
       results,
       run: { id: `r`, inputs: `records` },
@@ -2291,6 +2346,8 @@ async function driver(h, observe) {
       r.authored ? `authored ${r.class ?? r.outcome}` : (r.class ?? r.outcome),
     )
     if (r.testOutcome === `killed`) states.add(`ordinary killed`)
+    if (r.testOutcome !== undefined && r.testOutcome !== `survived`)
+      states.add(`a gap that an ordinary test kills`)
     if (r.class === `not-infected` && r.evidence)
       states.add(`not-infected with a boundary hint`)
   }
@@ -2392,7 +2449,12 @@ function check(h, observations, expected) {
   // A kill names a non-empty part of its behavioral laws (the runner may
   // stop at the first); an agreement-only kill names reach agreement.
   const view = (o) =>
-    JSON.stringify([o.outcome, o.class, o.testOutcome ?? null])
+    JSON.stringify([
+      o.outcome,
+      o.class,
+      o.testOutcome ?? null,
+      o.ordinaryBy ?? null,
+    ])
   for (const [mi, owed] of expected.outcomes.entries()) {
     const actual = got.outcomes[mi]
     const lawsFit =
@@ -2465,6 +2527,16 @@ function check(h, observations, expected) {
         `gap ${owed.key} lists the owners ${JSON.stringify(got.owners?.[owed.key])}, owed ${JSON.stringify(owed.ownerFiles)}`,
         `report order`,
         { actual: got.owners?.[owed.key], expected: owed.ownerFiles },
+      )
+    // Law 6: a gap that an ordinary test kills says which test, and what
+    // to do with it; any other gap has no such line.
+    const ordinaryOwed = ordinaryKills(owed) ? ordinaryLineOf(owed) : undefined
+    if (got.ordinaryLines?.[owed.key] !== ordinaryOwed)
+      return violation(
+        `classified`,
+        `gap ${owed.key} has the ordinary line ${JSON.stringify(got.ordinaryLines?.[owed.key])}, owed ${JSON.stringify(ordinaryOwed)}`,
+        `messages`,
+        { actual: got.ordinaryLines?.[owed.key], expected: ordinaryOwed },
       )
     // A not-infected message names the operand pairs the model saw, in
     // order, and no printed text stands for two values the model tells
@@ -2580,6 +2652,19 @@ function check(h, observations, expected) {
     return violation(`classified`, stdoutProblem, `stdout`, {
       actual: stdout,
     })
+  // Law 6: one legend line for the mark of a gap that an ordinary test
+  // kills, when any gap carries it.
+  const ordinaryLegends = stdout
+    .split(`\n`)
+    .filter((line) => line.startsWith(`oracle-gaps: legend ${ORDINARY_MARK}: `))
+  const owedLegends = gapsOfModel.some(ordinaryKills) ? [ORDINARY_LEGEND] : []
+  if (JSON.stringify(ordinaryLegends) !== JSON.stringify(owedLegends))
+    return violation(
+      `classified`,
+      `the stdout's legend lines for the ordinary mark are ${JSON.stringify(ordinaryLegends)}, owed ${JSON.stringify(owedLegends)}`,
+      `stdout`,
+      { actual: ordinaryLegends, expected: owedLegends },
+    )
   // One loop (the v20 freeze, 2026-11-10: test results and gaps together):
   // the stdout leads with the baseline, then names each oracle file that
   // fails with no mutant active and its failing test, with the step that
@@ -2757,19 +2842,25 @@ function check(h, observations, expected) {
         intent?.content === shortened(owed.authored.intent) &&
         rest.slice(intent.length) === ` (authored by ${owed.authored.author})`
     } else {
-      const a = rest === undefined ? undefined : readSpan(rest)
-      const arrow = a && rest.slice(a.length).startsWith(` → `)
-      const b = arrow ? readSpan(rest.slice(a.length + 3)) : undefined
+      // A gap that an ordinary test kills (law 6) ends with its mark.
+      const mark = ordinaryKills(owed) ? ` ${ORDINARY_MARK}` : ``
+      const change =
+        rest?.endsWith(mark) === true
+          ? rest.slice(0, rest.length - mark.length)
+          : undefined
+      const a = change === undefined ? undefined : readSpan(change)
+      const arrow = a && change.slice(a.length).startsWith(` → `)
+      const b = arrow ? readSpan(change.slice(a.length + 3)) : undefined
       shown =
         b !== undefined &&
-        a.length + 3 + b.length === rest.length &&
+        a.length + 3 + b.length === change.length &&
         a.content === shortened(owed.code[0]) &&
         b.content === shortened(owed.code[1])
     }
     if (!shown || /\n/.test(line))
       return violation(
         `classified`,
-        `the gap line of ${owed.id} is ${JSON.stringify(line)}, which does not show its change on one line, shortened to 60 characters`,
+        `the gap line of ${owed.id} is ${JSON.stringify(line)}, which does not show its change on one line, shortened to 60 characters${ordinaryKills(owed) ? `, and then ${JSON.stringify(ORDINARY_MARK)}` : ``}`,
         `gap line`,
         { actual: line, expected: owed.authored ?? owed.code },
       )
@@ -3304,6 +3395,62 @@ const calibrations = [
       v.summary.gaps.shift()
     }),
   },
+  // Law 6's mark of a gap that an ordinary test kills, each part dropped as
+  // a report that did not mark it would drop it.
+  {
+    name: `a gap an ordinary test kills has no mark on its gap line`,
+    law: `gap line`,
+    history: { constructed: `a survivor an ordinary test fails` },
+    corrupt: corrupt((v) => {
+      const at = v.streamed?.findIndex((l) =>
+        l.endsWith(` (an ordinary test kills it)`),
+      )
+      if (at === undefined || at < 0) return false
+      v.streamed[at] = v.streamed[at].slice(
+        0,
+        -` (an ordinary test kills it)`.length,
+      )
+      v.stdout = v.stdout.replace(` (an ordinary test kills it)\n`, `\n`)
+    }),
+  },
+  {
+    name: `a gap an ordinary test kills has no Ordinary tests line`,
+    law: `messages`,
+    history: { constructed: `a survivor an ordinary test fails` },
+    corrupt: corrupt((v) => {
+      const key = Object.keys(v.ordinaryLines ?? {})[0]
+      if (key === undefined) return false
+      delete v.ordinaryLines[key]
+    }),
+  },
+  {
+    name: `the stdout has no legend for the ordinary mark`,
+    law: `stdout`,
+    history: { constructed: `a survivor an ordinary test fails` },
+    corrupt: corruptStdout((stdout) =>
+      stdout.includes(`\noracle-gaps: legend (an ordinary test kills it): `)
+        ? stdout
+            .split(`\n`)
+            .filter(
+              (line) =>
+                !line.startsWith(
+                  `oracle-gaps: legend (an ordinary test kills it): `,
+                ),
+            )
+            .join(`\n`)
+        : undefined,
+    ),
+  },
+  {
+    name: `the results drop the ordinary tests that killed a gap`,
+    law: `classification`,
+    history: { constructed: `a survivor an ordinary test fails` },
+    corrupt: corrupt((v) => {
+      const o = v.outcomes.find((x) => x.ordinaryBy !== undefined)
+      if (!o) return false
+      delete o.ordinaryBy
+    }),
+  },
 ]
 
 const required = [
@@ -3347,6 +3494,7 @@ const required = [
   `dead-code`,
   `outside-annotation`,
   `ordinary killed`,
+  `a gap that an ordinary test kills`,
   `a key with backticks`,
   `authored not-observed`,
   `authored not-judged`,
@@ -3953,7 +4101,7 @@ const constructed = [
   }),
   single(
     `a survivor an ordinary test fails`,
-    [`not-observed`, `ordinary killed`],
+    [`not-observed`, `ordinary killed`, `a gap that an ordinary test kills`],
     {
       mutant: { operator: `binary-swap`, original: `>` },
       test: { pair: four([2, 2]) },

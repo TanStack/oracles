@@ -107,6 +107,19 @@ agent.
   constructed or fixed history isolates it. An authored mutant's copy is
   not instrumented, so a work bound does not judge it.
 
+  The baseline runs every test file, ordinary ones too, but only the oracle
+  files judge mutants. With `--ordinary`, the ordinary test files (those
+  that are not oracle files) also run against each survivor and each
+  unreached mutant that they reach, for information: `results.json` keeps
+  their outcome in `testOutcome`. An ordinary test never closes a gap. When
+  one fails under a mutant, the gap line ends with
+  `(an ordinary test kills it)`, `results.json` lists the failing tests in
+  `ordinaryBy`, and the gap in `summary.md` has an `Ordinary tests:` line
+  that names the first of them: the oracle lacks the history that test
+  builds. Read that test, and add a history like it to an owner oracle.
+  `--ordinary` costs one run of the reaching ordinary files for each such
+  mutant.
+
   Every line the CLI writes for a check, on stdout and stderr alike, starts
   with `oracle-gaps: ` and its kind, so an agent can act on the results as
   they stream with `grep '^oracle-gaps: '`, and filter one kind:

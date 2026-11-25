@@ -2563,8 +2563,10 @@ export default async (env) => {
         (st) => st.targets.testKeys,
       )
       for (const st of ordinary)
-        states.find((x) => x.mutant === st.mutant).result.testOutcome =
-          judgeOrdinary(st.units)
+        Object.assign(
+          states.find((x) => x.mutant === st.mutant).result,
+          judgeOrdinary(st.units),
+        )
       for (const st of states) {
         results.push(st.result)
         span(`mutant`, evaluated, {

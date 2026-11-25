@@ -48,15 +48,27 @@ export function change(result) {
 }
 
 /**
+ * Whether the ordinary tests failed under a gap's mutant (`--ordinary`: any
+ * ordinary outcome but `survived`): they kill what the oracle misses, so the
+ * oracle lacks the history they build.
+ */
+export const ordinaryKills = (result) =>
+  result.testOutcome !== undefined && result.testOutcome !== `survived`
+
+/** The mark that ends the gap line of a gap an ordinary test kills. */
+export const ORDINARY_MARK = `(an ordinary test kills it)`
+
+/**
  * One gap as one line: its kind, line, short id (the rerun's `--only` id),
- * and the change. A mutant that never applied (an authored `find` that no
- * longer matches) has no line, and says so. Printed as each mutant is judged,
- * and again in the summary.
+ * and the change, then the mark of a gap an ordinary test kills. A mutant
+ * that never applied (an authored `find` that no longer matches) has no
+ * line, and says so. Printed as each mutant is judged, and again in the
+ * summary.
  */
 export function gapLine(result) {
   return streamLine(
     `gap`,
-    `${kindOf(result)} L${result.line ?? `?`} ${result.id} ${change(result)}`,
+    `${kindOf(result)} L${result.line ?? `?`} ${result.id} ${change(result)}${ordinaryKills(result) ? ` ${ORDINARY_MARK}` : ``}`,
   )
 }
 

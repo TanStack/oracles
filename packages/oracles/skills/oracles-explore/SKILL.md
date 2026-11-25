@@ -564,7 +564,8 @@ them and stop.
 
 3. **Run it on the unchanged code, through the gap check.** Run the oracles
    only with `oracle-gaps` (the command is in `oracles-setup` step 7), never
-   with Vitest on its own. It prints each test file's result first, with a
+   with Vitest on its own. Pass `--ordinary` when the package has ordinary
+   tests, so a gap they kill is marked. It prints each test file's result first, with a
    failing law's replay, then each gap as it is judged: one command gives
    you the test results and the gaps together. Start it in the background,
    with a log at a path of its own, and read its new lines every few

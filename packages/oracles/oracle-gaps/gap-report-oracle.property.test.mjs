@@ -210,7 +210,14 @@
  *    oracle file never changes any of this, and runs only when the run asks
  *    for it (`--ordinary`, maintainer decision of 2026-11-06): then a
  *    survivor or an unreached mutant that an ordinary test reached reports
- *    the ordinary tests' outcome, for information. Only `killed` closes an owned
+ *    the ordinary tests' outcome, for information. Where an ordinary test
+ *    fails under it (the mutant changes what the test asserts on, throws
+ *    there, or never ends), the ordinary tests kill what the oracle misses,
+ *    which points at the history the oracle lacks: results.json's
+ *    `testOutcome` is then not `survived`, and the gap's line ends with
+ *    ` (an ordinary test kills it)` (a downstream report: such a survivor
+ *    was found only by running the ordinary suite by hand). It is still a
+ *    gap. Only `killed` closes an owned
  *    mutant; every other class is a gap.
  * 5. **Authored mutants.** An authored mutant whose text occurs exactly once
  *    is judged by law 4 against the owners of the function it edits, without
@@ -388,7 +395,9 @@
  *    The stdout's baseline, blocked, and gap lines carry the same prefixes.
  *    The stdout lists each gap the run reports in its results.json on
  *    exactly one gap line, under that gap's id, with the gap's kind, line,
- *    and change, and lists no gap line that results.json does not report
+ *    and change, then ` (an ordinary test kills it)` exactly when its
+ *    `testOutcome` is not `survived` (law 4), and lists no gap line that
+ *    results.json does not report
  *    (P10, one diagnostic per failure), cold and through the daemon. The
  *    law compares the stdout with the run's own report, by id: whether the
  *    report's gaps are the owed ones is the enumeration, probe-only code,
@@ -2432,6 +2441,8 @@ function readRunIn(dir, out, status, stderr, cli, stdout, derived) {
       laws: r.laws,
       probe: r.probeGuard === true,
       ordinaryOutcome: r.testOutcome !== undefined,
+      ordinaryKills:
+        r.testOutcome !== undefined && r.testOutcome !== `survived`,
     })),
     ...readSummary(summary),
   }
@@ -4480,6 +4491,8 @@ async function driver(plan, observe) {
     }
     if (plan.ordinary && cli.mutants.some((m) => m.ordinaryOutcome))
       states.add(`ordinary tests run when asked`)
+    if (plan.ordinary && cli.mutants.some((m) => m.ordinaryKills))
+      states.add(`a gap that an ordinary test kills`)
     if (!plan.ordinary && plan.tests.some((t) => t.file === `c`))
       states.add(`ordinary tests left out by default`)
     if (plan.stability !== `none` && cli.exit === 0) {
@@ -5085,6 +5098,14 @@ function check(plan, observations, expected) {
         `ordinary tier`,
         { actual: got, expected: owed },
       )
+  for (const [owed, got] of pairs)
+    if (!owed.probe && got.ordinaryKills !== owed.ordinaryKills)
+      return violation(
+        `cli`,
+        `${site(got)}: the ordinary tests' outcome says that ${got.ordinaryKills ? `an ordinary test fails` : `no ordinary test fails`} under it, owed ${owed.ordinaryKills ? `one fails` : `none fails`}`,
+        `ordinary tier`,
+        { actual: got, expected: owed },
+      )
   // Each authored mutant, by its key: its id, whatever its file is called.
   const authoredGot = cli.mutants.filter((m) => m.authored)
   if (authoredGot.length !== expected.authoredAll.length)
@@ -5421,6 +5442,8 @@ function stdoutGapBreach(stdoutGaps, results) {
     const owed = {
       kind: gap.class ?? gap.outcome,
       line: gap.line === undefined ? `?` : String(gap.line),
+      // A gap that an ordinary test kills ends with its mark (law 4).
+      marked: gap.testOutcome !== undefined && gap.testOutcome !== `survived`,
     }
     const shows = gap.authored
       ? read.intent !== undefined &&
@@ -5429,9 +5452,14 @@ function stdoutGapBreach(stdoutGaps, results) {
       : read.original !== undefined &&
         showsCode(read.original, gap.original) &&
         showsCode(read.replacement, gap.replacement)
-    if (read.kind !== owed.kind || read.line !== owed.line || !shows)
+    if (
+      read.kind !== owed.kind ||
+      read.line !== owed.line ||
+      read.marked !== owed.marked ||
+      !shows
+    )
       return {
-        difference: `the stdout's gap line for ${read.id} is ${JSON.stringify(line)}, and results.json reports it as ${owed.kind} at line ${owed.line}, changing ${JSON.stringify(gap.authored ? gap.intent : `${gap.original} → ${gap.replacement}`)}`,
+        difference: `the stdout's gap line for ${read.id} is ${JSON.stringify(line)}, and results.json reports it as ${owed.kind} at line ${owed.line}, changing ${JSON.stringify(gap.authored ? gap.intent : `${gap.original} → ${gap.replacement}`)}${owed.marked ? `, which an ordinary test kills` : ``}`,
         extra: { actual: line, expected: { ...owed, id: read.id } },
       }
   }
@@ -5451,12 +5479,24 @@ function stdoutGapBreach(stdoutGaps, results) {
 function readGapLine(line) {
   const head = line.match(/^oracle-gaps: gap ([\w-]+) L(\d+|\?) (\S+) (.*)$/)
   if (!head) return undefined
-  const [, kind, at, id, change] = head
+  const [, kind, at, id, rest] = head
+  // The mark of a gap that an ordinary test kills ends the line.
+  const marked = rest.endsWith(` (an ordinary test kills it)`)
+  const change = marked
+    ? rest.slice(0, -` (an ordinary test kills it)`.length)
+    : rest
   const first = readCodeSpan(change)
   if (!first) return undefined
   const authored = first.after.match(/^ \(authored by (.*)\)$/)
   if (authored)
-    return { kind, line: at, id, intent: first.code, author: authored[1] }
+    return {
+      kind,
+      line: at,
+      id,
+      marked,
+      intent: first.code,
+      author: authored[1],
+    }
   if (!first.after.startsWith(` → `)) return undefined
   const second = readCodeSpan(first.after.slice(` → `.length))
   if (!second || second.after !== ``) return undefined
@@ -5464,6 +5504,7 @@ function readGapLine(line) {
     kind,
     line: at,
     id,
+    marked,
     original: first.code,
     replacement: second.code,
   }
@@ -5781,6 +5822,34 @@ const firstWhere = (predicate, change) =>
     return cli
   })
 const calibrations = [
+  {
+    // The ordinary tests' outcome is reported, and says no ordinary test
+    // failed, though the mutant changes what the ordinary test asserts on.
+    name: `a gap an ordinary test kills is reported as an ordinary survivor`,
+    law: `ordinary tier`,
+    history: { constructed: `an ordinary test kills a gap` },
+    corrupt: corruptCli((cli) => {
+      const at = cli.mutants.findIndex((m) => m.ordinaryKills)
+      if (at < 0) return undefined
+      const mutants = [...cli.mutants]
+      mutants[at] = { ...mutants[at], ordinaryKills: false }
+      return { ...cli, mutants }
+    }),
+  },
+  {
+    // The gap line of a gap that an ordinary test kills, without its mark.
+    name: `a gap line leaves out that an ordinary test kills it`,
+    law: `greppable stream`,
+    history: { constructed: `an ordinary test kills a gap` },
+    corrupt: corruptCli((cli) => {
+      const mark = ` (an ordinary test kills it)`
+      const at = cli.stdoutGaps?.findIndex((l) => l.endsWith(mark)) ?? -1
+      if (at < 0) return undefined
+      const stdoutGaps = [...cli.stdoutGaps]
+      stdoutGaps[at] = stdoutGaps[at].slice(0, -mark.length)
+      return { ...cli, stdoutGaps }
+    }),
+  },
   {
     name: `a refused run is reported as complete`,
     law: `ownership`,
@@ -6685,6 +6754,7 @@ const required = [
   `a skipped call killed`,
   `a module-level cache judged afresh`,
   `ordinary tests run when asked`,
+  `a gap that an ordinary test kills`,
   `ordinary tests left out by default`,
   `two authored mutants judged apart`,
   `timeout`,
@@ -10542,6 +10612,30 @@ oracleProperty({
           laterSteps: NO_LATER_STEPS,
           dataOwners: [`b`],
           tests: [{ ...judging(`b`, `fixed seed`, 1), flaky: true, fn: 0 }],
+        }),
+      },
+      {
+        // One owned function with no oracle test, so its mutants are
+        // unreached, and an ordinary test that calls it and asserts on its
+        // trace, in a run that asks for the ordinary tests: a mutant that
+        // drops the push fails that test, which kills what the oracle
+        // misses (law 4). Appended at the end of the list.
+        name: `an ordinary test kills a gap`,
+        enters: [`a gap that an ordinary test kills`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`c`, `case`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          ordinary: true,
+          steps: null,
         }),
       },
     ]),
