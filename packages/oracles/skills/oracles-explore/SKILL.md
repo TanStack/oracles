@@ -494,6 +494,14 @@ Settle these privately too:
 - **What each probe found:** each constraint, dynamic, or boundary becomes a
   law, a history dimension, or a constructed history. Keep a pointer to the
   probe that showed it.
+- **What its callers do between calls:** an example in the README is one
+  caller's workflow, not the grammar. Find the library's main downstream
+  callers (its dependents, linked repositories, the docs of frameworks that
+  use it) and list the operations they perform between calls: a framework's
+  compiler that strips a handler and then asks which names are still
+  referenced rewrites an initializer, which a README example that deletes a
+  statement never does. Each operation becomes a history dimension or a
+  stated limit (ORC-004 reconstruction).
 
 **Always build the strongest oracle the laws need.** Its model predicts every
 observation that the approved laws make a claim about. How the oracle is
