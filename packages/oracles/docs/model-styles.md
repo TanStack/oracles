@@ -249,7 +249,8 @@ Use this when the contract leaves a choice open. Predict every allowed
 outcome, cite the clause for each, and accept any member.
 
 Law: "After `save`, the store notifies `written` and `indexed`, in either
-order (README, Events: the two listeners are independent)."
+order (README, Events: the two listeners are independent)." Limits: "It
+leaves the order of `written` and `indexed` open."
 
 ```ts
 type Notice = 'written' | 'indexed'
@@ -261,14 +262,41 @@ function allowedNotices(): Array<Array<Notice>> {
   ]
 }
 
-function noticesAllowed(observed: Array<Notice>): boolean {
-  return allowedNotices().some(
-    (allowed) =>
-      allowed.length === observed.length &&
-      allowed.every((notice, i) => notice === observed[i]),
-  )
-}
+// In the check:
+return (
+  notAllowed(
+    'notices',
+    'notices',
+    observed,
+    allowedNotices(),
+    'the order of `written` and `indexed`',
+  ) ?? pass
+)
 ```
+
+`notAllowed(checkpoint, law, actual, allowed, freedom)` is a violation of
+`law` when `actual` is the same data as no member of `allowed`, and undefined
+otherwise, so it chains as `differs` does. Its last argument names the
+freedom the set rests on, in the words of the law's `limits`. In a
+property's check, a freedom that `limits` does not contain verbatim throws
+an `OracleFreedomError`, and every history test of that property fails. An
+allowed set is never wider than the limits the law states, and a freedom
+added to the limits is a law change, which the developer approves.
+
+An allowed set follows two rules:
+
+- **No wider than the stated limits.** Each choice the set leaves open is a
+  freedom the limits name. A set that also accepts a choice the limits do
+  not name hides behavior the law never left open: a mutant that moves
+  production to that choice survives, and nothing in the report says the
+  law never allowed it. When the freedom is per element (each name may be
+  in or out), call `notAllowed` once per element, with `[true, false]` or
+  the one owed answer, and do not build the set of every combination.
+- **A calibration pins each freedom's edge.** Give each freedom a
+  calibration whose wrong answer lies just outside it: the choice the limits
+  do not leave open, such as a third order, or an element outside the
+  freedom that goes either way. A calibration inside the set must pass, so
+  it shows nothing.
 
 Never pick the order that production happens to use: that would reject a
 valid implementation. A mutant that only switches production to the other
