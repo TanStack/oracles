@@ -302,9 +302,13 @@ oracle-gaps: summary 2b0beb1ef751: 5 mutants, 5 killed, 0 gaps, 0 unowned (warni
 oracle-gaps: done completed, 0 gaps, report …/summary.md
 ```
 
-There are no "equivalent mutants". Every survivor points to a missing
-history, a missing observation, a missing law, or dead code; dismissing one
-as harmless hides real bugs.
+There are no "equivalent mutants". Behind every survivor, look first for a
+missing history, a missing observation, or a missing law; dismissing one as
+harmless hides real bugs. Dead code is the last explanation, and it needs
+evidence: every public entry point that reaches the code is owned by a law
+that decides the value exactly, and the gap runs before and after the
+removal keep every kill, compared by mutant key
+([`oracles-design` step 7](../skills/oracles-design/SKILL.md#7-show-the-evidence-that-fits-the-change)).
 
 ## The gap classes
 
@@ -394,7 +398,8 @@ The gap check's legend line prints the full instruction for each class.
 - Run oracles through the gap check, which prints the test results before
   the gaps.
 - Never dismiss a survivor as equivalent. Find the missing history,
-  observation, or law, or show that the code is dead.
+  observation, or law. Call the code dead only last, with the evidence
+  above.
 
 ## Where to go next
 
