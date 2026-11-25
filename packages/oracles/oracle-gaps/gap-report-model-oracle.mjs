@@ -5503,12 +5503,13 @@ function model(plan) {
         ? `threads`
         : `forks`,
     mutants,
-    // Law 16: the keys of the operator mutants on lines changed since the
-    // commit that `--diff-base` names.
+    // Law 16: the keys of the mutants on lines changed since the commit that
+    // `--diff-base` names, operator and authored. An authored mutant that
+    // does not apply has no line.
     changedKeys:
       plan.diffBase &&
       ((changed) =>
-        mutants
+        [...mutants, ...authoredAll.map((a) => ({ ...a, source: SOURCE }))]
           .filter((m) => changed[m.source].includes(m.line))
           .map((m) => m.key)
           .sort())(diffBaseOf(plan, fixtureFiles(plan)).changed),

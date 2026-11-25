@@ -47,6 +47,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyAuthored, loadAuthored } from './authored.mjs'
 import {
   authoredKey,
+  diffNote,
   gapsOf,
   keyAndSelect,
   renderReport,
@@ -2128,21 +2129,51 @@ export default async (env) => {
     const ownersOf = (mutant) => owned.at(mutant.source, mutant.position).owners
     // Keys are numbered over every mutant before the selection (report.mjs).
     let queue = keyAndSelect(mutants, options)
+    // Each authored mutant the run selects (every one without --only), with
+    // its patched copy, or none where its edit does not apply.
+    let chosen = authored
+      .filter(
+        (mutant) => !options.only || options.only.has(`authored:${mutant.id}`),
+      )
+      .map((mutant) => {
+        const path = realpathSync(join(pkg, mutant.source))
+        return {
+          mutant,
+          path,
+          patched: applyAuthored(readFileSync(path, `utf8`), mutant),
+        }
+      })
+    // With --diff-base, the run judges only the mutants, operator and
+    // authored, on lines changed since its commit, and says how many of the
+    // run's mutants those are; the baseline still runs every test file.
+    const diffs = new Map()
+    const inDiff = (source, line) => {
+      if (!options.diffBase) return undefined
+      if (!diffs.has(source))
+        diffs.set(source, diffLines(pkg, options.diffBase, source))
+      return diffs.get(source).has(line)
+    }
+    let judgedOnly
+    if (options.diffBase) {
+      for (const mutant of queue)
+        mutant.inDiff = inDiff(mutant.source, mutant.line)
+      const all = queue.length + chosen.length
+      queue = queue.filter((mutant) => mutant.inDiff)
+      chosen = chosen.filter(({ mutant, patched }) =>
+        inDiff(mutant.source, patched?.line),
+      )
+      judgedOnly = diffNote(options.diffBase, queue.length + chosen.length, all)
+      log(streamLine(`note`, judgedOnly))
+    }
     // With --only, the baseline runs only the owners of the selected mutants
     // (maintainer disposition G5, 2026-11-11), operator and authored.
     const selectedOwners =
       options.only &&
       new Set([
         ...queue.flatMap((mutant) => [...ownersOf(mutant)]),
-        ...authored
-          .filter((mutant) => options.only.has(`authored:${mutant.id}`))
-          .flatMap((mutant) => {
-            const path = realpathSync(join(pkg, mutant.source))
-            const patched = applyAuthored(readFileSync(path, `utf8`), mutant)
-            return patched
-              ? [...owned.at(mutant.source, patched.position).owners]
-              : []
-          }),
+        ...chosen.flatMap(({ mutant, patched }) =>
+          patched ? [...owned.at(mutant.source, patched.position).owners] : [],
+        ),
       ])
     // The first pass runs every test file, ordinary ones too, so the report
     // leads with each file's result (the v20 freeze's one loop: test results
@@ -2377,12 +2408,6 @@ export default async (env) => {
     )
 
     // 3–5. Mutants.
-    const diffs = new Map(
-      options.sources.map((source) => [
-        source,
-        diffLines(pkg, options.diffBase, source),
-      ]),
-    )
     const results = []
     const started = Date.now()
     // Results are appended as they finish, so a stopped survey keeps them.
@@ -2511,7 +2536,6 @@ export default async (env) => {
     async function evaluateGroup(group, slot) {
       const evaluated = Date.now()
       const states = group.map((mutant) => {
-        mutant.inDiff = diffs.get(mutant.source)?.has(mutant.line)
         const owners = ownersOf(mutant)
         const targets = targetsOf(mutant, baseline, owners, oracleFiles)
         const decided = owners.size === 0 || targets.oracleTargets.length === 0
@@ -2608,11 +2632,8 @@ export default async (env) => {
     // function its edit lands in, whole files, still stopping at its first
     // kill.
     const authoredJobs = []
-    for (const mutant of authored) {
+    for (const { mutant, path, patched } of chosen) {
       const id = `authored:${mutant.id}`
-      if (options.only && !options.only.has(id)) continue
-      const path = realpathSync(join(pkg, mutant.source))
-      const patched = applyAuthored(readFileSync(path, `utf8`), mutant)
       const result = {
         id,
         authored: true,
@@ -2626,6 +2647,7 @@ export default async (env) => {
         original: mutant.find,
         replacement: mutant.replace,
         line: patched?.line,
+        inDiff: inDiff(mutant.source, patched?.line),
       }
       results.push(result)
       if (!patched) {
@@ -2746,6 +2768,7 @@ export default async (env) => {
         excluded: excluded.map(relative),
         baseline: baselineFiles,
         config: options.config,
+        judgedOnly,
       }),
     )
     if (existsSync(testOutput) && statSync(testOutput).size > 0)
@@ -2808,7 +2831,7 @@ function identityOf(options, authored, testFiles, oracleCount) {
   hash.update(JSON.stringify({ ...decisive, only: [...(options.only ?? [])] }))
   return {
     id: hash.digest(`hex`).slice(0, 12),
-    inputs: `${options.sources.length} source files, ${oracleCount} oracle files, ${testFiles.length - oracleCount} ordinary test files, ${authored.length} authored mutants, seed ${options.seed ?? `(none)`}, pool ${options.pool}${options.only || options.sample !== undefined ? `; a partial run (--only or --sample)` : ``}`,
+    inputs: `${options.sources.length} source files, ${oracleCount} oracle files, ${testFiles.length - oracleCount} ordinary test files, ${authored.length} authored mutants, seed ${options.seed ?? `(none)`}, pool ${options.pool}${options.only || options.sample !== undefined || options.diffBase ? `; a partial run (--only, --sample, or --diff-base)` : ``}`,
   }
 }
 
@@ -2820,7 +2843,6 @@ function identityOf(options, authored, testFiles, oracleCount) {
  * are literal, so a name with `*` or `:` names one file.
  */
 function diffLines(pkg, diffBase, source) {
-  if (!diffBase) return undefined
   const git = (...args) => {
     const child = spawnSync(`git`, [`--literal-pathspecs`, ...args], {
       cwd: pkg,

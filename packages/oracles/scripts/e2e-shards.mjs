@@ -385,6 +385,11 @@ export const shards = {
     `determinism: constructed history: a check with --diff-base and an untracked source`,
     `calibration: a run with --diff-base marks a mutant of an untracked source unchanged`,
     `calibration: a run with --diff-base judges a mutant otherwise than the run without it`,
+    `calibration: a run with --diff-base judges a mutant on an unchanged line`,
+    `calibration: a run with --diff-base runs the baseline of fewer test files`,
+    `calibration: a run with --diff-base does not note what it judges`,
+    `calibration: a run with --diff-base's summary.md does not say what it judges`,
+    `calibration: a run with --diff-base is not marked partial`,
     // The filed history of a stale authored mutant's fourth base (about 12 s).
     `fixed history: a filed base whose owner reads an absent object through ?.`,
     `determinism: fixed history: a filed base whose owner reads an absent object through ?.`,

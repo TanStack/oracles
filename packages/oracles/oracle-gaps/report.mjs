@@ -66,6 +66,14 @@ export function assignKeys(mutants) {
 }
 
 /**
+ * What a run with `--diff-base` judges: `judged` of the `all` mutants it
+ * would judge without the option, the ones on lines changed since
+ * `diffBase.rev` (the stream's note and summary.md say it alike).
+ */
+export const diffNote = (diffBase, judged, all) =>
+  `--diff-base ${escapeControls(diffBase.rev)}: ${judged} of ${all} mutants are on changed lines; the others are not judged in this run`
+
+/**
  * The mutants a run selects, keyed over the whole list first: keys are the
  * same in a partial run (`only`, a set of ids, or `sample`, a fixed-seed
  * count per source) and in a full one.
@@ -279,6 +287,7 @@ export function renderReport({
   excluded,
   baseline = [],
   config,
+  judgedOnly,
 }) {
   const gaps = gapsOf(results)
   const guards = results.filter((r) => r.probeGuard)
@@ -306,6 +315,7 @@ export function renderReport({
         : ``),
     ``,
   ]
+  if (judgedOnly) lines.push(`${judgedOnly}.`, ``)
   if (excluded.length > 0)
     lines.push(
       `Ordinary test files left out because they fail with no mutant active: ${excluded.join(`, `)}.`,
