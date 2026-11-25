@@ -115,8 +115,14 @@ agent.
   and the same text under `## Survivors clustered in one function` in
   `summary.md`. Such a function may be performance machinery or redundant
   design, so the note asks the maintainer whether it is needed before
-  histories are added for it or it is removed. The gaps keep their own
-  directives.
+  histories are added for it or it is removed. The note also lists the
+  public entry points that statically reach the function, the exports of
+  the `--source` files whose call trees hold it, each with the oracle files
+  that own it: `Reached from: src/a.ts#parse (owned by
+tests/parse.oracle.test.ts), src/b.ts#format (owned by nothing).` No law
+  judges what an entry point owned by nothing returns, so the note says
+  that the survivors are no evidence that such an entry point does not need
+  the function. The gaps keep their own directives.
 
   Every line the CLI writes for a check, on stdout and stderr alike, starts
   with `oracle-gaps: ` and its kind, so an agent can act on the results as

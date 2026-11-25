@@ -129,7 +129,7 @@ export function analyze(ts, pkg, sources, testFiles) {
     compilerOptions(ts),
     hostFor(ts),
   )
-  const owned = ownership(ts, program, pkg, declarations)
+  const owned = ownership(ts, program, pkg, declarations, sources)
   // A bad entry is named before the run's lack of an owner, which it can
   // cause: the entry is what the author must fix.
   for (const [file, entries] of declarations)

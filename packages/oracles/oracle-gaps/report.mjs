@@ -286,6 +286,24 @@ const groupOf = (gap) =>
 // counterpart would mean, and claims nothing about it.
 const CLUSTER_LEAST = 5
 const clusterQuestion = `It may be performance machinery or redundant design: ask the maintainer whether this function is needed before adding histories for it or removing it; a model with no counterpart for it is evidence it may not be.`
+// Survivors say nothing about what an entry point that no law judges needs:
+// a downstream project removed code whose survivors clustered, and changed
+// the result of a second export that no oracle owned (2026-11-25).
+const unjudgedEntry = `No law judges what an entry point owned by nothing returns, so these survivors are no evidence that it does not need this function.`
+const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+// What the note says of one entry point: who owns it. A later clause about
+// an owner (what its law accepts here) belongs inside these parentheses.
+const ownedBy = ({ owners }) =>
+  owners.length === 0
+    ? `owned by nothing`
+    : `owned by ${[...owners].sort(byCodeUnit).join(`, `)}`
+// The exports of the --source files whose static call trees hold a function
+// (`reachedFrom`, owners.mjs), by owns name, and who owns each.
+function reachOf(points) {
+  if (points.length === 0) return `Reached from no export of a --source file.`
+  const sorted = [...points].sort((a, b) => byCodeUnit(a.entry, b.entry))
+  return `Reached from: ${sorted.map((point) => `${point.entry} (${ownedBy(point)})`).join(`, `)}.`
+}
 
 /**
  * The cluster notes, one per function where survivors cluster, in the order
@@ -293,9 +311,11 @@ const clusterQuestion = `It may be performance machinery or redundant design: as
  * changed no observation (every survivor class but `not-judged` and
  * `indeterminate`) out of its operator mutants the run judged (owned,
  * outside probe code, and not blocked), the count of each such class by
- * class name, and the question.
+ * class name, the entry points that reach it (`reachedFrom(source, name)`,
+ * each `{ entry, owners }` with package-relative owner paths), and the
+ * question.
  */
-export function clustersOf(results) {
+export function clustersOf(results, reachedFrom) {
   // Functions in the order of their first mutant, whatever its outcome.
   const functions = groupBy(
     results.filter((r) => !r.authored),
@@ -317,8 +337,10 @@ export function clustersOf(results) {
     const classes = [...groupBy(unseen, kindOf)]
       .sort(([a], [b]) => (a < b ? -1 : 1))
       .map(([kind, list]) => `${kind} ${list.length}`)
+    const points = reachedFrom(all[0].source, all[0].function)
+    const unjudged = points.some((point) => point.owners.length === 0)
     return [
-      `${group}: ${unseen.length} of ${counted(rows.length, `mutant`)} survived with no observation changed (${classes.join(`, `)}). ${clusterQuestion}`,
+      `${group}: ${unseen.length} of ${counted(rows.length, `mutant`)} survived with no observation changed (${classes.join(`, `)}). ${reachOf(points)} ${clusterQuestion}${unjudged ? ` ${unjudgedEntry}` : ``}`,
     ]
   })
 }
@@ -329,6 +351,7 @@ export function renderReport({
   excluded,
   baseline = [],
   config,
+  reachedFrom,
 }) {
   const gaps = gapsOf(results)
   const guards = results.filter((r) => r.probeGuard)
@@ -434,7 +457,7 @@ export function renderReport({
       )
     }
   }
-  const clusters = clustersOf(results)
+  const clusters = clustersOf(results, reachedFrom)
   if (clusters.length > 0)
     lines.push(
       `## Survivors clustered in one function`,
@@ -474,6 +497,7 @@ export function renderStdout({
   paths,
   baseline = [],
   config,
+  reachedFrom,
 }) {
   const gaps = gapsOf(results)
   const unowned = results.filter(
@@ -514,7 +538,7 @@ export function renderStdout({
     )
     for (const gap of rows) lines.push(gapLine(gap))
   }
-  for (const note of clustersOf(results))
+  for (const note of clustersOf(results, reachedFrom))
     lines.push(streamLine(`note`, `cluster ${note}`))
   for (const [group, rows] of groupBy(unowned, groupOf))
     lines.push(
