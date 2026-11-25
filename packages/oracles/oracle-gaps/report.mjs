@@ -288,21 +288,24 @@ const CLUSTER_LEAST = 5
 const clusterQuestion = `It may be performance machinery or redundant design: ask the maintainer whether this function is needed before adding histories for it or removing it; a model with no counterpart for it is evidence it may not be.`
 
 /**
- * The cluster notes, one per function where survivors cluster, in report
- * order: the function, its survivors whose runs changed no observation
- * (every survivor class but `not-judged` and `indeterminate`) out of its
- * operator mutants the run judged (owned, outside probe code, and not
- * blocked), the count of each such class by class name, and the question.
+ * The cluster notes, one per function where survivors cluster, in the order
+ * of each function's first mutant: the function, its survivors whose runs
+ * changed no observation (every survivor class but `not-judged` and
+ * `indeterminate`) out of its operator mutants the run judged (owned,
+ * outside probe code, and not blocked), the count of each such class by
+ * class name, and the question.
  */
 export function clustersOf(results) {
-  const judged = results.filter(
-    (r) =>
-      !r.probeGuard &&
-      !r.authored &&
-      r.outcome !== `unowned` &&
-      r.outcome !== `blocked`,
+  // Functions in the order of their first mutant, whatever its outcome.
+  const functions = groupBy(
+    results.filter((r) => !r.authored),
+    groupOf,
   )
-  return [...groupBy(judged, groupOf)].flatMap(([group, rows]) => {
+  return [...functions].flatMap(([group, all]) => {
+    const rows = all.filter(
+      (r) =>
+        !r.probeGuard && r.outcome !== `unowned` && r.outcome !== `blocked`,
+    )
     const unseen = rows.filter(
       (r) =>
         r.outcome === `survived` &&

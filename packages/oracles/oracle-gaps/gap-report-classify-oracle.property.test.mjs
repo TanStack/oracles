@@ -1413,7 +1413,8 @@ function model(h) {
 // The cluster notes (law 8): each function whose survivors with no observation
 // changed are at least 5, and at least half of its operator mutants that the
 // run judged (owned, outside probe code, not blocked), with the count of each
-// such class by class name. In function order, as the report groups them.
+// such class by class name. In function order: the order of each function's
+// first mutant, whatever its outcome.
 const CLUSTER_LEAST = 5
 const clusterQuestion = `It may be performance machinery or redundant design: ask the maintainer whether this function is needed before adding histories for it or removing it; a model with no counterpart for it is evidence it may not be.`
 function clustersOf(outcomes) {
@@ -2351,6 +2352,20 @@ async function driver(h, observe) {
     states.add(`a key with backticks`)
   if (results.filter((r) => r.authored && r.outcome === `survived`).length >= 5)
     states.add(`five authored survivors`)
+  if (
+    [`f0`, `f1`].every(
+      (fn) =>
+        results.filter(
+          (r) =>
+            r.function === fn &&
+            r.outcome === `survived` &&
+            !r.probeGuard &&
+            r.class !== `not-judged` &&
+            r.class !== `indeterminate`,
+        ).length >= 5,
+    )
+  )
+    states.add(`two functions with clusters`)
   // Survivors with no observation changed in one function (law 8): at least
   // 5 and at least half, at exactly half, 5 under half, and 4; and a cluster
   // beside mutants the count leaves out: unowned, blocked, and probe code.
@@ -3573,6 +3588,7 @@ const required = [
   `four survivors in one function`,
   `four survivors beside an indeterminate one`,
   `five authored survivors`,
+  `two functions with clusters`,
   `survivors cluster beside unowned mutants`,
   `survivors cluster beside blocked mutants`,
   `survivors cluster beside probe mutants`,
@@ -3681,7 +3697,8 @@ const single = (
 // effect: its operator (`delete-call` by default), its effect under the test
 // (`same` by default), its owners (the test's file by default; file 1 is an
 // oracle file whose one test fails with no mutant active), whether it is
-// probe code, and whether only a nondeterministic test reaches it.
+// probe code, whether only a nondeterministic test reaches it, and its line
+// (1 puts it in `f1`).
 const clustered = (name, enters, effects) => ({
   name,
   enters,
@@ -3731,6 +3748,7 @@ const clustered = (name, enters, effects) => ({
         ...(e.operator ? { operator: e.operator } : {}),
         ...(e.owners ? { owners: e.owners } : {}),
         ...(e.probe ? { probe: true } : {}),
+        ...(e.line ? { line: e.line } : {}),
       })),
     }
   },
@@ -4524,6 +4542,18 @@ const constructed = [
     [
       ...Array.from({ length: 5 }, () => ({})),
       ...Array.from({ length: 6 }, () => ({ owners: [1] })),
+    ],
+  ),
+  // Notes in function order, the order of each function's first mutant:
+  // `f0`'s first mutant is unowned and comes first, then `f1`'s survivors,
+  // then `f0`'s (review of #260).
+  clustered(
+    `two functions with clusters, the first one's first mutant unowned`,
+    [`two functions with clusters`],
+    [
+      { owners: [] },
+      ...Array.from({ length: 5 }, () => ({ line: 1 })),
+      ...Array.from({ length: 5 }, () => ({})),
     ],
   ),
   // Authored mutants are no function's, so five that survive get no note.
