@@ -24,18 +24,20 @@
  * is the same data as some member, by the data domain's equality, so key
  * order and Map entry order do not count, and -0, NaN, and an undefined field
  * do; a value outside the domain, such as a Date, compares by Node's
- * `isDeepStrictEqual`, as in `differs`. The stated freedom: while a property's check runs, `notAllowed` reads
- * that property's `limits`, and a freedom that is blank, or that the limits
- * do not contain verbatim (another case is not verbatim), throws.
+ * `isDeepStrictEqual`, as in `differs`. The stated freedom: while a
+ * property's check runs, and only then, `notAllowed` reads that property's
+ * `limits`, and a freedom that is blank, or that the limits do not contain
+ * verbatim (another case is not verbatim), throws.
  *
  * Law `allowed set`: for every value and every list of up to three allowed
  * values, `notAllowed` is undefined when the value is the same data as some
  * member, and otherwise a violation of its law at its checkpoint whose values
- * are `{ actual, expected: allowed }`, the arguments themselves, and whose
- * difference names the freedom. A value deeper than the data encoding can
- * follow fails the comparison with the framework's encoding-limit error, as
- * in `differs`. Outside a property's check it reads no law, so no freedom
- * throws there.
+ * are `{ actual, expected: allowed }`, the arguments themselves (the list
+ * itself, not a copy), and whose difference names the freedom. A value
+ * deeper than the data encoding can follow fails the comparison with the
+ * framework's encoding-limit error, as in `differs`. Outside a property's
+ * check, in a driver and in the property's own `predict` and `reached`, it
+ * reads no law, so no freedom throws there.
  *
  * Law `freedom in limits`: for every property whose check calls `notAllowed`
  * with a freedom its limits do not state, each history test fails with an
@@ -43,28 +45,34 @@
  * freedom, whatever its driver does; so does each calibration whose driver
  * does not throw. With a stated freedom, its tests judge the allowed set as
  * the first law says. Its determinism test runs no check and fails only when
- * the driver throws. The file's other properties keep their own outcomes, and
- * the file loads.
+ * the driver throws. Whatever else a check throws after a driver that threw
+ * (an Error, a string, even a revoked proxy whose class cannot be read), the
+ * test fails with the driver's error. The file's other properties keep their
+ * own outcomes, and the file loads.
  *
  * For `allowed set`, a history is a value and the allowed list, drawn from
  * tokens whose classes are the data equality's distinctions; the driver calls
- * `notAllowed` itself, outside any check, and the model compares classes. For
+ * `notAllowed` itself, outside any check, and the model compares classes; a
+ * second property calls it in `predict` and `reached` as well, and binds a
+ * probe to whether the classes match, so a prediction that throws or differs
+ * breaks `reach agreement`. For
  * `freedom in limits`, a history is a suite of twenty properties of one
  * history each; the two suites together hold every spelling of the freedom
  * in the limits (verbatim, another case, absent, empty, blank), a value inside
  * or outside a set of one or two members, and a driver that throws after it
- * observes or not. The driver runs the suite under real Vitest in a child
- * process and records each test's state and errors; the check compares them
- * with each property's owed outcomes.
+ * observes or not; a third suite's checks throw instead, after a driver that
+ * threw. The driver runs the suite under real Vitest in a child
+ * process and records each test's state and errors; the check compares every
+ * row, duplicates kept, with each property's owed outcomes.
  *
  * Limits: the freedom is matched as text, so a freedom stated in other words
  * than the limits' fails, and a short freedom that occurs inside an unrelated
  * sentence of the limits passes. Whether the allowed set holds only what the
  * freedom describes is the model's to state and a calibration's to pin; the
  * framework cannot see it. A check is synchronous, so no asynchronous check
- * is generated. The edits to `judge` that set and clear the running property
- * are judged by the second law and by hand-written wrong versions, not owned
- * here.
+ * is generated. The edits to `judge` that set and clear the running property,
+ * and that keep the driver's error, are judged by these laws and by
+ * hand-written wrong versions, not owned here.
  */
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'

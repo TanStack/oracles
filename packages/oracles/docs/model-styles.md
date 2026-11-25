@@ -279,9 +279,12 @@ return (
 otherwise, so it chains as `differs` does. Its last argument names the
 freedom the set rests on, in the words of the law's `limits`. In a
 property's check, a freedom that `limits` does not contain verbatim throws
-an `OracleFreedomError`, and every history test of that property fails. An
-allowed set is never wider than the limits the law states, and a freedom
-added to the limits is a law change, which the developer approves.
+an `OracleFreedomError`. A test fails when its check reaches that call and
+lets the error escape; a history whose check never makes the call does not
+test the freedom. Only the freedom's text is checked: a set that names a
+stated freedom can still hold too many members, or too few, so keeping its
+members within the stated limits is the model's job. A freedom added to the
+limits is a law change, which the developer approves.
 
 An allowed set follows two rules:
 
@@ -295,8 +298,10 @@ An allowed set follows two rules:
 - **A calibration pins each freedom's edge.** Give each freedom a
   calibration whose wrong answer lies just outside it: the choice the limits
   do not leave open, such as a third order, or an element outside the
-  freedom that goes either way. A calibration inside the set must pass, so
-  it shows nothing.
+  freedom that goes either way. The check must reject that answer under the
+  calibration's law, so the calibration test passes. A wrong answer chosen
+  inside the set is accepted by the check, and that calibration test fails:
+  it does not pin the edge.
 
 Never pick the order that production happens to use: that would reject a
 valid implementation. A mutant that only switches production to the other

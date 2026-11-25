@@ -414,8 +414,10 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
   `differs(...) ?? pass`. For an allowed set, use
   `notAllowed(checkpoint, law, actual, allowed, freedom) ?? pass`, which
   accepts any member. Its `freedom` is the limits' own words for the choice,
-  and a freedom that the limits do not contain verbatim fails the property.
-  Give each freedom a calibration whose wrong answer lies just outside it.
+  and a check that reaches it with a freedom the limits do not contain
+  verbatim fails. Only the text is checked, so keep the set's members within
+  the stated limits, and give each freedom a calibration whose wrong answer
+  lies just outside it.
 - **Calibration.** Give at least one `calibration`: a wrong answer, as a
   corrupted trace or a mutant driver, and the law that must reject it
   (ORC-006). Bind each one to the history it corrupts, so that it runs only

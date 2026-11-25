@@ -16,8 +16,8 @@
  * The parts keep their jobs separate (oracle rubric, ORC-003):
  *
  * - `law` states the promise, its authority, and its limits. A failure names it.
- *   An allowed set in the check rests only on freedoms its limits state
- *   (`notAllowed`, below).
+ *   An allowed set that the check states with `notAllowed` (below) names a
+ *   freedom, and the limits must state that freedom in its words.
  * - `histories` is either an enumerated list, which runs in full (bounded
  *   exhaustiveness, glossary), the same list with declared states,
  *   `{ enumerated, states, measured }`, or a generated source: a fast-check
@@ -399,10 +399,13 @@ function sameData(actual: unknown, expected: unknown): boolean {
  * lets the set hold more than one member, in the words of the law's
  * `limits`. In a property's check, a freedom that is empty, or that the
  * law's `limits` does not contain verbatim, throws an `OracleFreedomError`
- * that names the property, the checkpoint, and the freedom: every test of
- * that property that runs its check fails, and the file's other properties
- * do not. So an allowed set rests only on freedoms that the law states.
- * Outside a property's check, no law is read.
+ * that names the property, the checkpoint, and the freedom. A test of that
+ * property fails when its check reaches the call and lets the error escape;
+ * a history whose check never makes the call does not test that freedom,
+ * and the file's other properties are not affected. Only the freedom's text
+ * is checked: whether the members of `allowed` are what the freedom
+ * describes is the model's to get right. Outside a property's check, in its
+ * model, `predict`, `reached`, or driver, no law is read.
  */
 export function notAllowed(
   checkpoint: string,
@@ -431,6 +434,16 @@ export function notAllowed(
 /** An allowed set that rests on a freedom the law's limits do not state. */
 export class OracleFreedomError extends Error {
   override name = `OracleFreedomError`
+}
+
+// Whether a thrown value is an `OracleFreedomError`, without throwing: a
+// revoked proxy's prototype cannot be read.
+const isFreedomError = (error: unknown): boolean => {
+  try {
+    return error instanceof OracleFreedomError
+  } catch {
+    return false
+  }
 }
 
 // The property whose check is running, so `notAllowed` reads its limits.
@@ -1822,19 +1835,20 @@ function judge<THistory, TExpected, TPlan>(
     if (carried) modelError.driverError = carried.error
     throw modelError
   }
-  const outer = judging
-  judging = { id: options.id, limits: options.law.limits }
   try {
-    verdict = options.check(plan, observations, expected)
+    // Only the check reads the law's limits (`notAllowed`).
+    const outer = judging
+    judging = { id: options.id, limits: options.law.limits }
+    try {
+      verdict = options.check(plan, observations, expected)
+    } finally {
+      judging = outer
+    }
     predicted = options.predict?.(plan) ?? {}
   } catch (error) {
     // A partial trace the model or check cannot read is still a setup
     // error, unlike an allowed set that the law does not state.
-    throw driverError && !(error instanceof OracleFreedomError)
-      ? driverError.error
-      : error
-  } finally {
-    judging = outer
+    throw driverError && !isFreedomError(error) ? driverError.error : error
   }
   if (driverError) {
     // Only a violation at a checkpoint the driver recorded before it threw
