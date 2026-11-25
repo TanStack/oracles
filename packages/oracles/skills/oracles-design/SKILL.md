@@ -420,6 +420,25 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
   instead, and registration warns about it; that search goes away before
   the first release. A state's forced-probe controls bind the same way,
   through the property's `probeHistories`.
+  Give each clause of a law statement its own check. A statement that
+  joins promises with "and" makes one promise per clause. The comparison
+  with the model can serve one of them. Each other clause gets a
+  comparison of its own, against what that clause alone predicts, with its
+  own `difference`, and a calibration that breaks only that clause and
+  names that `difference`. A clause that holds only through the model is
+  unchecked: when the model shares a mistake with production, the model
+  comparison passes, and so does any calibration that names only the law.
+  For example, a law says that pruning "removes exactly what the transform
+  made unreferenced, keeps everything that was already unused, and with no
+  transform changes nothing". For
+  `const { handler = () => handler(), other } = config` and a no-op
+  transform, production removed `handler`, because its candidates counted
+  `handler`'s read of itself as a use. The model counted it too, predicted
+  the same removal, and the law passed. A calibration that drops a
+  declaration from a no-op history's output, with the difference "a no-op
+  transform changed the output", fails until the check compares a no-op
+  history's output with its input. With that comparison, the oracle fails
+  on production.
 - **Ownership.** Put the owned code on the property's `owns` list. An entry is
   a file (`src/x.ts`) or one function and its static call tree
   (`src/x.ts#run`, `src/x.ts#Class.method`). Own only what the laws cover. The
