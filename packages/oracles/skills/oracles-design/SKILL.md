@@ -170,6 +170,30 @@ authority, and limits go in that property's `law` option. Put prose beside the m
 the driver, and the check that says why each one predicts or tests the
 promised result.
 
+**Split an oracle file that a reviewer can no longer hold.** A sign is a
+file that has grown past about 2,000 lines or ten properties, or whose
+properties judge boundaries that share no state. Split the properties by
+boundary, such as one public entry point or phase per oracle file, and move
+what they share into one module beside them:
+
+- **The shared module** holds the grammar, `resolve`, the model, the driver,
+  and helpers for the check. It registers no test of its own. Name it for
+  its oracle with `oracle` in the name, but not at its start
+  (`cart-oracle-model.ts`), and not as a test file. With `oracle` in its
+  name, the lint rules for oracle files apply to it. A name that starts with
+  `oracle-` marks the framework's own machinery, and `oracle/no-unit-test`
+  does not report its tests.
+- **Each oracle file** keeps its own law block and registers its
+  properties, with their literal `owns` and `law`, through `oracleProperty`
+  or a helper that forwards them. The gap check reads `owns` only in test
+  files, so an `owns` list written in the shared module owns nothing.
+- **Do not pass the shared module to `--source`.** The gap check mutates
+  only `--source` files, and it would report the module's functions as
+  unowned production.
+
+`oracle/pure-model` does not check a model that is imported from another
+module, so review a shared model for clocks and randomness yourself.
+
 **Check the law block:**
 
 - From the prose alone, a reader can predict one observation of each law.

@@ -303,6 +303,11 @@ No requirement here can be met by declaring something out of reach.
   oracle files. The gap check counts only kills through a registered
   `oracleProperty` route; a plain test in an oracle file is reported as an
   unregistered kill.
+- **Author:** A module that holds an oracle's shared grammar, `resolve`,
+  model, or driver defines its histories, so this applies to it too. Name it
+  with `oracle` in its name, but not at its start, so the lint rules apply
+  (`oracles-design` step 1, splitting an oracle file).
+  `oracle/pure-model` does not read a model imported from another module.
 - **Does not satisfy:** Renaming a unit test, adding contract prose, or
   wrapping fixed expectations in a property runner.
 
