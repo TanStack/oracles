@@ -67,6 +67,17 @@ agent.
   in its `detail` in `results.json`. Record the error in the driver, and
   state the law that decides that input's outcome.
 
+  A gap's `Reach` line in `summary.md` says how often the random budget
+  reached its code: `ran in 3 of 400 histories of its owner tests`, where a
+  history is one outermost run of a fast-check property (a generated or
+  example run, or a shrink) in the deterministic tests of its owner files,
+  with no mutant active. For an `if` or a comparison it adds in how many of
+  those the mutant changes its value. `results.json` keeps the counts as
+  `reach: { histories, ran, changed }`. A test that runs no property counts
+  no history, and code that runs only when the module loads runs in none. A
+  low count means the random budget rarely reaches this line: add a
+  constructed history for it.
+
   A survivor that changed no observation but made a test do more work is
   `extra-work`: the mutant deleted a shortcut that exists only for speed,
   such as an early return or an assignment in place of a slower call. A

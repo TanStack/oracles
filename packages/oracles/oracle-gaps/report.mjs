@@ -220,6 +220,12 @@ const legendOf = (kind) =>
 // A count of things, as the report words it.
 const counted = (n, thing) => `${n} ${thing}${n === 1 ? `` : `s`}`
 
+// How often the owner tests' fast-check histories reached a mutant's code
+// (classify.mjs `reachOf`), and for an `if` or a comparison how often the
+// mutant would have changed its value there.
+const reachText = ({ histories, ran, changed }) =>
+  `ran in ${ran} of ${histories} ${histories === 1 ? `history` : `histories`} of its owner tests${changed === undefined ? `` : `, and the mutant changes its value in ${changed} of them`}`
+
 /**
  * The baseline's lines that lead both reports (the v20 freeze's one loop:
  * test results and gaps together): each test file's result, a line for
@@ -339,6 +345,8 @@ export function renderReport({
     `3. Re-plan the oracle around that law: its grammar or domain, model, observations, or comparison. Do not patch the line, except dead code, whose gap says to remove the code.`,
     `4. Run the check again.`,
     ``,
+    `A gap's Reach line says in how many of its owner tests' fast-check histories the mutated code ran. A low count means the random budget rarely reaches this line: add a constructed history for it, rather than more runs.`,
+    ``,
     `Rerun one mutant with \`--only <id>\`.`,
     ``,
     `## Gaps`,
@@ -355,6 +363,7 @@ export function renderReport({
       )
       if (gap.oracleFiles?.length)
         lines.push(`  - Owners: ${gap.oracleFiles.join(`, `)}`)
+      if (gap.reach) lines.push(`  - Reach: ${reachText(gap.reach)}`)
       if (gap.changedTests?.length)
         lines.push(
           `  - Changed observations in: ${gap.changedTests

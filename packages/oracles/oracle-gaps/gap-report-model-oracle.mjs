@@ -42,6 +42,16 @@ const DERIVED_FN = `Derived.constructor`
 const DERIVED_HELPER = `nothing`
 // The inputs a derived class is run with, each judged against the model.
 export const DERIVED_INPUTS = [0, 4, 9]
+// The runs of a test that is a property of @fast-check/vitest (`asProp`).
+const PROP_RUNS = 20
+// The property that a shrinking calibration (`shrinks`) injects, which fails
+// and shrinks to 5.
+const SHRUNK_PROPERTY = `fc.property(fc.integer({ min: 0, max: 1000 }), (n) => n < 5), { seed: 1 }`
+// How many runs of its predicate fast-check makes for that property under
+// its defaults: the failing first run and the ten shrinks it tries (the
+// lockfile's fast-check 4.10.2; a probe that counts the predicate's calls
+// prints 11). Each is one history of the calibration's test.
+const SHRINK_RUNS = 11
 // Where this package's own dependencies are installed.
 const OWN_MODULES = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -4205,9 +4215,13 @@ function interpret(plan, fnId, x, sites, active) {
   // is never work (maintainer decision, 2026-11-16): a probe-only site's
   // evaluation counts nothing.
   let work = 0
+  // The sites the run itself evaluated, without those its module's load
+  // reached (`loaded`), which ran before any test.
+  const ran = new Set()
   const reach = (id) => {
     if (!sites[id].probe) work += 1
     reached.add(id)
+    ran.add(id)
   }
   const outcomes = []
   // The comparison sites whose two operators disagree on the operands this
@@ -4636,7 +4650,7 @@ function interpret(plan, fnId, x, sites, active) {
     if (error instanceof Spin) spun = true
     else threw = true
   }
-  return { trace, threw, spun, reached, outcomes, infected, work }
+  return { trace, threw, spun, reached, ran, outcomes, infected, work }
 }
 
 /** A loop that never ends, as the interpreter sees one. */
@@ -5400,6 +5414,40 @@ function model(plan) {
       interpret(plan, t.fn, t.input, sites).reached.has(site.id),
     )
   }
+  // How often the owner tests' fast-check histories reached a mutant's code
+  // (law 4's reach): the histories of the deterministic owner tests that
+  // judge, each a property run (a test.prop's runs, and the failing run and
+  // shrinks of a shrinking calibration's injected property), the histories
+  // whose run evaluated the site, and, for an `if` or a comparison, those in
+  // which the mutant would have changed its value. A test.prop runs its body
+  // alike in every run; code that ran only at the module's load ran in no
+  // history; and a calibration calls production outside its property.
+  const historiesOf = (t) =>
+    t.asProp ? PROP_RUNS : t.shrinks ? partsOf(t).length * SHRINK_RUNS : 0
+  const reachOf = (site) => {
+    const tests = ownerTests(site.fnId).filter((t) => !t.flaky)
+    const histories = tests.reduce((n, t) => n + historiesOf(t), 0)
+    if (histories === 0) return undefined
+    const loadOnly = site.fnId === `<module>` || site.data !== undefined
+    const inRuns = (seen) =>
+      loadOnly
+        ? 0
+        : tests.filter(
+            (t) =>
+              t.asProp &&
+              partsOf(t).some((part) =>
+                seen(interpret(plan, t.fn, part.input, sites)).has(site.id),
+              ),
+          ).length * PROP_RUNS
+    const ran = inRuns((run) => run.ran)
+    const measured =
+      site.operator === `if-true` ||
+      site.operator === `if-false` ||
+      (site.operator === `binary-swap` && site.logical !== true)
+    return measured
+      ? { histories, ran, changed: inRuns((run) => run.infected) }
+      : { histories, ran }
+  }
   const survivorKinds = new Set([
     `not-judged`,
     `extra-work`,
@@ -5428,6 +5476,11 @@ function model(plan) {
       kind,
       ordinaryOutcome:
         plan.ordinary && survivorKinds.has(kind) && ordinaryReaches(site),
+      // Every judged mutant carries its reach; a blocked one waits.
+      reach:
+        kind === undefined || [`unowned`, `blocked`].includes(kind)
+          ? undefined
+          : reachOf(site),
     }
   })
   // Each authored mutant is judged alone, against the original source with
@@ -5788,7 +5841,7 @@ function oracleTestFile(plan, file) {
         // An injected failure shrinks to its smallest counterexample.
         ...(t.shrinks
           ? [
-              `    const shrunk${i} = fc.check(fc.property(fc.integer({ min: 0, max: 1000 }), (n) => n < 5), { seed: 1 })`,
+              `    const shrunk${i} = fc.check(${SHRUNK_PROPERTY})`,
               `    if (shrunk${i}.counterexample?.[0] !== 5) throw new Error('the injected failure did not shrink')`,
             ]
           : []),
@@ -5855,7 +5908,7 @@ function oracleTestFile(plan, file) {
           ]
         : []),
       t.asProp
-        ? `  fcTest.prop([fcv.integer({ min: 0, max: 10 })], { numRuns: 20, seed: 1 })('${testName(t, index)}', async (n) => {`
+        ? `  fcTest.prop([fcv.integer({ min: 0, max: 10 })], { numRuns: ${PROP_RUNS}, seed: 1 })('${testName(t, index)}', async (n) => {`
         : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.timed || lazyGated(plan, file, t) || fsGated(plan, file, t) ? `async ` : ``}() => {`,
       ...partsOf(t).flatMap(campaign),
       `  })`,

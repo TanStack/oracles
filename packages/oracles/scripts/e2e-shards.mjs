@@ -375,6 +375,9 @@ export const shards = {
     `fixed seed 20261105: module data that only the failing owner's passing pair judges`,
     `random seed: module data that only the failing owner's passing pair judges`,
     `determinism: constructed history: module data that only the failing owner's passing pair judges`,
+    `fixed seed 20261105: two test.prop properties beside a plain test`,
+    `random seed: two test.prop properties beside a plain test`,
+    `determinism: constructed history: two test.prop properties beside a plain test`,
     // The filed history of a stale authored mutant's fourth base (about 12 s).
     `fixed history: a filed base whose owner reads an absent object through ?.`,
     `determinism: fixed history: a filed base whose owner reads an absent object through ?.`,

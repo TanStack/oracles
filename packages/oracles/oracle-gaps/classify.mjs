@@ -308,7 +308,56 @@ export function baselineOf(firstRows, secondRows, failing = []) {
       secondRows.get(key)?.calls === row.calls
     )
       work.set(key, row.calls)
-  return { firstRows, nondeterministic, leftOut, reachedBy, rank, work }
+  // The fast-check histories of each test that judges (capture-setup.mjs
+  // `histories`), with the histories each site ran in and those its mutant
+  // would have changed a value in. A test left out judges nothing, and so
+  // does every test of a file that failed outside its tests.
+  const histories = new Map()
+  for (const [key, row] of firstRows)
+    if (
+      row.histories > 0 &&
+      !row.background &&
+      !leftOut.has(key) &&
+      !leftOut.has(fileOf(key))
+    )
+      histories.set(key, {
+        histories: row.histories,
+        ran: new Map(row.siteHistories),
+        changed: new Map(row.siteInfected),
+      })
+  return {
+    firstRows,
+    nondeterministic,
+    leftOut,
+    reachedBy,
+    rank,
+    work,
+    histories,
+  }
+}
+
+/**
+ * How often the unmutated runs reached a mutant's code: the fast-check
+ * histories that its owner files' tests that judge ran (`histories`), in how
+ * many of them its site ran (`ran`), and, for an `if` or a comparison, in how
+ * many of those its mutant would have changed the expression's value
+ * (`changed`). Undefined when those tests ran no history. A low count shows
+ * a state that the random budget rarely reaches.
+ */
+export function reachOf(mutant, owners, baseline) {
+  let histories = 0
+  let ran = 0
+  let changed = 0
+  for (const [key, counts] of baseline.histories ?? [])
+    if (owners.has(fileOf(key))) {
+      histories += counts.histories
+      ran += counts.ran.get(mutant.number) ?? 0
+      changed += counts.changed.get(mutant.number) ?? 0
+    }
+  if (histories === 0) return undefined
+  return isIf(mutant) || isComparison(mutant)
+    ? { histories, ran, changed }
+    : { histories, ran }
 }
 
 /**
@@ -439,9 +488,17 @@ function reachingIn(rows, targets) {
  * one), `not-infected` (a comparison whose operators agreed on every
  * operand the owners reached; `operands` names them), and `not-observed`
  * (infected, and no recorded observation changed; `infectedBy` names the
- * test that infected it).
+ * test that infected it). Every outcome but `unowned` carries `reach`
+ * (`reachOf`) when its owner tests ran fast-check histories.
  */
-export function judgeMutant(mutant, { owners, targets, units, baseline }) {
+export function judgeMutant(mutant, judged) {
+  const result = judgedMutant(mutant, judged)
+  if (result.outcome === `unowned`) return result
+  const reach = reachOf(mutant, judged.owners, judged.baseline)
+  return reach === undefined ? result : { ...result, reach }
+}
+
+function judgedMutant(mutant, { owners, targets, units, baseline }) {
   if (owners.size === 0) return { outcome: `unowned` }
   if (targets.oracleKeys.length === 0) return { outcome: `unreached` }
   const rows = new Map(units.flatMap((u) => u.rows ?? []))
