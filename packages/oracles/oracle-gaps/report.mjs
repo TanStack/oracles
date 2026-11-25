@@ -13,7 +13,8 @@
 // (`renderStdout`) prints the totals, one legend line per class present (its
 // directive, with placeholders), and every gap once, one line each, grouped
 // by function, with owners printed once per function as package-relative
-// paths. Unowned warnings are counted per function. A gap is identified by an
+// paths. Unowned warnings are counted per function, and a function where
+// survivors cluster gets one note (`clustersOf`). A gap is identified by an
 // anchor that survives unrelated edits and reformatting: the source file, the
 // function (`name`, or `Class.method`), the operator, and the tokens of the
 // innermost statement or declaration that holds the site, joined by single
@@ -273,6 +274,55 @@ const groupOf = (gap) =>
     ? `authored mutants (${gap.source})`
     : `fn ${gap.function} (${gap.source})`
 
+// A function where survivors cluster: at least this many of its mutants
+// survived with no observation changed, and they are at least half of its
+// operator mutants that the run judged. Five is more than one statement's
+// mutants (an `if` gives its two forced outcomes, its comparison, and the
+// call it guards), and half keeps a long function's few survivors out. Such
+// a cluster can be performance machinery or redundant design, which more
+// histories would only pin down (a downstream project's report,
+// 2026-11-25), so the note asks the maintainer before either. The CLI
+// cannot see the oracle's model, so the note says what a model with no
+// counterpart would mean, and claims nothing about it.
+const CLUSTER_LEAST = 5
+const clusterQuestion = `It may be performance machinery or redundant design: ask the maintainer whether this function is needed before adding histories for it or removing it; a model with no counterpart for it is evidence it may not be.`
+
+/**
+ * The cluster notes, one per function where survivors cluster, in the order
+ * of each function's first mutant: the function, its survivors whose runs
+ * changed no observation (every survivor class but `not-judged` and
+ * `indeterminate`) out of its operator mutants the run judged (owned,
+ * outside probe code, and not blocked), the count of each such class by
+ * class name, and the question.
+ */
+export function clustersOf(results) {
+  // Functions in the order of their first mutant, whatever its outcome.
+  const functions = groupBy(
+    results.filter((r) => !r.authored),
+    groupOf,
+  )
+  return [...functions].flatMap(([group, all]) => {
+    const rows = all.filter(
+      (r) =>
+        !r.probeGuard && r.outcome !== `unowned` && r.outcome !== `blocked`,
+    )
+    const unseen = rows.filter(
+      (r) =>
+        r.outcome === `survived` &&
+        r.class !== `not-judged` &&
+        r.class !== `indeterminate`,
+    )
+    if (unseen.length < CLUSTER_LEAST || 2 * unseen.length < rows.length)
+      return []
+    const classes = [...groupBy(unseen, kindOf)]
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([kind, list]) => `${kind} ${list.length}`)
+    return [
+      `${group}: ${unseen.length} of ${counted(rows.length, `mutant`)} survived with no observation changed (${classes.join(`, `)}). ${clusterQuestion}`,
+    ]
+  })
+}
+
 export function renderReport({
   results,
   run,
@@ -384,6 +434,14 @@ export function renderReport({
       )
     }
   }
+  const clusters = clustersOf(results)
+  if (clusters.length > 0)
+    lines.push(
+      `## Survivors clustered in one function`,
+      ``,
+      ...clusters.map((note) => `- ${note}`),
+      ``,
+    )
   const byLaw = new Map()
   for (const result of killed)
     for (const law of result.laws ?? [])
@@ -456,6 +514,8 @@ export function renderStdout({
     )
     for (const gap of rows) lines.push(gapLine(gap))
   }
+  for (const note of clustersOf(results))
+    lines.push(streamLine(`note`, `cluster ${note}`))
   for (const [group, rows] of groupBy(unowned, groupOf))
     lines.push(
       streamLine(
